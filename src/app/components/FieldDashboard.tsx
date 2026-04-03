@@ -21,6 +21,7 @@ import {
   Navigation,
   Sun,
   Moon,
+  Download,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -72,6 +73,7 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
+import { ExportDialog } from "./ExportDialog"
 
 interface VoterMapProps {
   voters: Voter[]
@@ -159,16 +161,23 @@ function StatCard({
   icon: React.ReactNode
   variant?: "default" | "secondary" | "destructive" | "outline"
 }) {
+  const variantStyles = {
+    default: "bg-primary/15 text-primary",
+    secondary: "bg-secondary text-secondary-foreground",
+    destructive: "bg-destructive/15 text-destructive",
+    outline: "bg-muted text-muted-foreground"
+  }
+
   return (
-    <Card className="flex-1">
-      <CardContent className="flex items-center justify-between p-4">
-        <div className="flex items-center gap-3">
-          <div className={`rounded-lg p-2 ${variant === "default" ? "bg-primary/10 text-primary" : variant === "secondary" ? "bg-secondary text-secondary-foreground" : variant === "destructive" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>
+    <Card className="flex-1 hover:shadow-md transition-shadow">
+      <CardContent className="flex items-center justify-between p-5">
+        <div className="flex items-center gap-4">
+          <div className={`rounded-xl p-3 ${variantStyles[variant]}`}>
             {icon}
           </div>
           <div>
-            <p className="text-sm text-muted-foreground">{title}</p>
-            <p className="text-2xl font-semibold">{count}</p>
+            <p className="text-sm font-medium text-muted-foreground mb-1">{title}</p>
+            <p className="text-3xl font-bold tracking-tight">{count}</p>
           </div>
         </div>
       </CardContent>
@@ -274,64 +283,63 @@ const VoterCard = memo(({ voter, onUpdateStatus }: { voter: Voter; onUpdateStatu
   const status = statusConfig[voter.status]
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <div>
-            <CardTitle className="text-base">{voter.name}</CardTitle>
-            <CardDescription className="line-clamp-1">
+    <Card className="hover:shadow-md transition-shadow border-l-4 border-l-transparent hover:border-l-primary">
+      <CardHeader className="pb-4 pt-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <CardTitle className="text-lg font-semibold leading-tight mb-1">{voter.name}</CardTitle>
+            <CardDescription className="text-sm leading-relaxed line-clamp-2">
               {voter.displayAddress}
             </CardDescription>
           </div>
-          <Badge variant={status.variant} className="gap-1">
+          <Badge variant={status.variant} className="gap-1.5 px-2.5 py-1 text-xs font-medium shrink-0">
             {status.icon}
             {status.label}
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="pb-3">
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <div className="text-muted-foreground">
-            <span className="font-medium text-foreground">Area:</span>{" "}
-            {voter.areaCluster}
+      <CardContent className="pb-4">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground font-medium min-w-[40px]">Area:</span>
+            <span className="text-foreground">{voter.areaCluster}</span>
           </div>
-          <div className="text-muted-foreground">
-            <span className="font-medium text-foreground">Age:</span>{" "}
-            {voter.age} yrs
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground font-medium min-w-[40px]">Age:</span>
+            <span className="text-foreground">{voter.age} yrs</span>
           </div>
-          <div className="text-muted-foreground">
-            <span className="font-medium text-foreground">Gender:</span>{" "}
-            {voter.gender}
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground font-medium min-w-[40px]">Gender:</span>
+            <span className="text-foreground capitalize">{voter.gender}</span>
           </div>
           {voter.phoneNumber && (
-            <div className="text-muted-foreground">
-              <span className="font-medium text-foreground">Phone:</span>{" "}
-              {voter.phoneNumber}
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground font-medium min-w-[40px]">Phone:</span>
+              <span className="text-foreground font-mono text-xs">{voter.phoneNumber}</span>
             </div>
           )}
           {voter.relativeName && (
-            <div className="col-span-2 text-muted-foreground">
-              <span className="font-medium text-foreground">
-                {voter.relativeType}:
-              </span>{" "}
-              {voter.relativeName}
+            <div className="col-span-2 flex items-center gap-2">
+              <span className="text-muted-foreground font-medium min-w-[80px]">{voter.relativeType}:</span>
+              <span className="text-foreground">{voter.relativeName}</span>
             </div>
           )}
           {voter.distance !== undefined && (
-            <div className="col-span-2 text-xs text-muted-foreground">
-              Distance: {voter.distance.toFixed(2)} km
+            <div className="col-span-2 flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground font-medium">Distance:</span>
+              <span className="text-muted-foreground">{voter.distance.toFixed(2)} km</span>
             </div>
           )}
         </div>
       </CardContent>
-      <CardFooter className="flex flex-wrap gap-2 pt-0">
+      <CardFooter className="flex flex-wrap gap-2 pt-0 pb-5 px-5">
         {voter.status !== "done" && (
           <Button
             size="sm"
-            className="flex-1"
+            className="flex-1 h-9"
             onClick={() => onUpdateStatus?.(voter._id, "done")}
           >
-            <CheckCircle2 className="mr-1 size-4" />
+            <CheckCircle2 className="mr-1.5 size-4" />
             Mark Done
           </Button>
         )}
@@ -339,9 +347,10 @@ const VoterCard = memo(({ voter, onUpdateStatus }: { voter: Voter; onUpdateStatu
           <Button
             variant="outline"
             size="sm"
+            className="h-9"
             onClick={() => onUpdateStatus?.(voter._id, "pending")}
           >
-            <RotateCcw className="mr-1 size-4" />
+            <RotateCcw className="mr-1.5 size-4" />
             Pending
           </Button>
         )}
@@ -349,23 +358,25 @@ const VoterCard = memo(({ voter, onUpdateStatus }: { voter: Voter; onUpdateStatu
           <Button
             variant="secondary"
             size="sm"
+            className="h-9"
             onClick={() => onUpdateStatus?.(voter._id, "revisit")}
           >
-            <RotateCcw className="mr-1 size-4" />
+            <RotateCcw className="mr-1.5 size-4" />
             Revisit
           </Button>
         )}
         <Button
           variant={voter.visited ? "default" : "outline"}
           size="sm"
+          className="h-9"
           onClick={() => onUpdateStatus?.(voter._id, voter.status)}
         >
           {voter.visited ? "Unvisit" : "Visit"}
         </Button>
         {voter.phoneNumber && (
           <a href={`tel:${voter.phoneNumber}`}>
-            <Button variant="outline" size="sm">
-              <Phone className="mr-1 size-4" />
+            <Button variant="outline" size="sm" className="h-9">
+              <Phone className="mr-1.5 size-4" />
               Call
             </Button>
           </a>
@@ -377,8 +388,8 @@ const VoterCard = memo(({ voter, onUpdateStatus }: { voter: Voter; onUpdateStatu
           target="_blank"
           rel="noopener noreferrer"
         >
-          <Button variant="outline" size="sm">
-            <Navigation className="mr-1 size-4" />
+          <Button variant="outline" size="sm" className="h-9">
+            <Navigation className="mr-1.5 size-4" />
             Map
           </Button>
         </a>
@@ -445,6 +456,7 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
   const [appliedFilters, setAppliedFilters] = useState<Filters>(pendingFilters)
   const [activeTab, setActiveTab] = useState("list")
   const [isApplying, setIsApplying] = useState(false)
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false)
 
   // Get user location
   useEffect(() => {
@@ -870,8 +882,8 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
 
       <main className="flex-1">
         {/* Stats Cards */}
-        <div className="container px-4 py-4">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="container px-4 py-6">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <StatCard
               title="Total"
               count={stats.total}
@@ -905,18 +917,18 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
         </div>
 
         {/* Main Content */}
-        <div className="container px-4 pb-8">
-          <div className="flex gap-6">
+        <div className="container px-4 pb-10">
+          <div className="flex gap-8">
             {/* Desktop Sidebar Filters */}
-            <div className="hidden w-64 shrink-0 lg:block">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Filter className="size-4" />
+            <div className="hidden w-72 shrink-0 lg:block">
+              <Card className="sticky top-20">
+                <CardHeader className="pb-4">
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Filter className="size-5" />
                     Filters
                   </CardTitle>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="pt-0">
                   <FilterContent showApply={true} />
                 </CardContent>
               </Card>
@@ -969,12 +981,25 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
                     <p className="text-sm text-muted-foreground">
                       {isLoading ? "Loading..." : `${filteredVoters.length} voters found`}
                     </p>
-                    {hasActiveFilters && (
-                      <Button variant="ghost" size="sm" onClick={clearFilters}>
-                        <X className="mr-1 size-4" />
-                        Clear
-                      </Button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {!isLoading && filteredVoters.length > 0 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setIsExportDialogOpen(true)}
+                          className="gap-1"
+                        >
+                          <Download className="size-4" />
+                          Export
+                        </Button>
+                      )}
+                      {hasActiveFilters && (
+                        <Button variant="ghost" size="sm" onClick={clearFilters}>
+                          <X className="mr-1 size-4" />
+                          Clear
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
                   {isLoading ? (
@@ -1021,6 +1046,13 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
           </div>
         </div>
       </main>
+
+      <ExportDialog
+        open={isExportDialogOpen}
+        onOpenChange={setIsExportDialogOpen}
+        voters={filteredVoters}
+        filters={appliedFilters}
+      />
     </div>
   )
 }
