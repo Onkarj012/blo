@@ -17,7 +17,9 @@
 # next.js
 /.next/
 /out/
-/data/app/
+
+# data files (voter data)
+/data/
 
 # production
 /build

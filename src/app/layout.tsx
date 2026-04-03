@@ -1,11 +1,17 @@
 import type { Metadata } from "next";
 import { ServiceWorkerRegister } from "@/components/service-worker-register";
 import { ConvexClientProvider } from "./ConvexClientProvider";
+import { ThemeProvider } from "./ThemeProvider";
+import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
-import { Geist } from "next/font/google";
+import { Inter } from "next/font/google";
 import { cn } from "@/lib/utils";
 
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-sans',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: "Field Voter Finder",
@@ -24,11 +30,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={cn("h-full antialiased", "font-sans", geist.variable)}>
+    <html lang="en" className={cn("h-full antialiased text-base", "font-sans", inter.variable)} suppressHydrationWarning>
       <body className="min-h-full flex flex-col">
-        <ConvexClientProvider>
-          {children}
-        </ConvexClientProvider>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
+          <ConvexClientProvider>
+            {children}
+          </ConvexClientProvider>
+          <Toaster />
+        </ThemeProvider>
         <ServiceWorkerRegister />
       </body>
     </html>

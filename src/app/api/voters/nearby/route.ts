@@ -27,7 +27,10 @@ export const GET = requireAuth(async (request: NextRequest) => {
       ? statusParam as VoterStatus 
       : "pending";
     
-    const visited = searchParams.get("visited") as "all" | "visited" | "unvisited" | undefined;
+    const visitedParam = searchParams.get("visited");
+    const visited = visitedParam && ["all", "visited", "unvisited"].includes(visitedParam) 
+      ? visitedParam as "all" | "visited" | "unvisited"
+      : undefined;
     const name = searchParams.get("name") || undefined;
     const phone = searchParams.get("phone") || undefined;
     const address = searchParams.get("address") || undefined;
@@ -41,26 +44,26 @@ export const GET = requireAuth(async (request: NextRequest) => {
     const lat = searchParams.get("lat") ? parseFloat(searchParams.get("lat")!) : undefined;
     const lng = searchParams.get("lng") ? parseFloat(searchParams.get("lng")!) : undefined;
     const radius = searchParams.get("radius") ? parseInt(searchParams.get("radius")!) : undefined;
-    const limit = parseInt(searchParams.get("limit") || "50", 10);
+    const limit = parseInt(searchParams.get("limit") || "2000", 10);
     
-    // Get voters from Convex
+    // Get voters from Convex - only pass defined params
     const result = await convexClient.query(api.voters.getVoters, {
       status,
-      visited,
-      name,
-      phone,
-      address,
-      gender,
-      minAge,
-      maxAge,
-      areaCluster,
-      phoneOnly,
-      includeVague,
-      includeMissing,
-      lat,
-      lng,
-      radius,
-      limit,
+      ...(visited ? { visited } : {}),
+      ...(name ? { name } : {}),
+      ...(phone ? { phone } : {}),
+      ...(address ? { address } : {}),
+      ...(gender ? { gender } : {}),
+      ...(minAge !== undefined ? { minAge } : {}),
+      ...(maxAge !== undefined ? { maxAge } : {}),
+      ...(areaCluster ? { areaCluster } : {}),
+      ...(phoneOnly ? { phoneOnly } : {}),
+      ...(includeVague ? { includeVague } : {}),
+      ...(includeMissing ? { includeMissing } : {}),
+      ...(lat !== undefined ? { lat } : {}),
+      ...(lng !== undefined ? { lng } : {}),
+      ...(radius !== undefined ? { radius } : {}),
+      ...(limit !== undefined ? { limit } : {}),
     });
     
     const response = NextResponse.json(result);
