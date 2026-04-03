@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-03-26T21:49:24",
+  "summaries": [
+    {
+      "folder": "101_200",
+      "images_processed": 99,
+      "rows_written": 99,
+      "ok_rows": 97,
+      "partial_rows": 2,
+      "failed_rows": 0,
+      "output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/101_200.csv"
+    },
+    {
+      "folder": "1_100",
+      "images_processed": 89,
+      "rows_written": 89,
+      "ok_rows": 86,
+      "partial_rows": 3,
+      "failed_rows": 0,
+      "output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/1_100.csv"
+    },
+    {
+      "folder": "201_300",
+      "images_processed": 102,
+      "rows_written": 102,
+      "ok_rows": 101,
+      "partial_rows": 1,
+      "failed_rows": 0,
+      "output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/201_300.csv"
+    }
+  ]
+}

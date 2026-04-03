@@ -1,0 +1,35 @@
+{
+  "generated_at": "2026-03-27T21:58:43",
+  "summaries": [
+    {
+      "folder": "301_400",
+      "images_processed": 100,
+      "rows_written": 100,
+      "ok_rows": 96,
+      "partial_rows": 4,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/301_400.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/301_400_cleaned.csv"
+    },
+    {
+      "folder": "401_500",
+      "images_processed": 100,
+      "rows_written": 100,
+      "ok_rows": 98,
+      "partial_rows": 2,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/401_500.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/401_500_cleaned.csv"
+    },
+    {
+      "folder": "501_600",
+      "images_processed": 95,
+      "rows_written": 95,
+      "ok_rows": 89,
+      "partial_rows": 6,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/501_600.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/501_600_cleaned.csv"
+    }
+  ]
+}

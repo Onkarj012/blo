@@ -1,0 +1,125 @@
+{
+  "generated_at": "2026-04-01T17:10:42",
+  "summaries": [
+    {
+      "folder": "1_100",
+      "images_processed": 89,
+      "rows_written": 89,
+      "ok_rows": 86,
+      "partial_rows": 3,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/1_100.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/1_100_cleaned.csv"
+    },
+    {
+      "folder": "101_200",
+      "images_processed": 99,
+      "rows_written": 99,
+      "ok_rows": 97,
+      "partial_rows": 2,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/101_200.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/101_200_cleaned.csv"
+    },
+    {
+      "folder": "201_300",
+      "images_processed": 102,
+      "rows_written": 102,
+      "ok_rows": 101,
+      "partial_rows": 1,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/201_300.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/201_300_cleaned.csv"
+    },
+    {
+      "folder": "301_400",
+      "images_processed": 100,
+      "rows_written": 100,
+      "ok_rows": 96,
+      "partial_rows": 4,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/301_400.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/301_400_cleaned.csv"
+    },
+    {
+      "folder": "401_500",
+      "images_processed": 100,
+      "rows_written": 100,
+      "ok_rows": 98,
+      "partial_rows": 2,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/401_500.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/401_500_cleaned.csv"
+    },
+    {
+      "folder": "501_600",
+      "images_processed": 95,
+      "rows_written": 95,
+      "ok_rows": 89,
+      "partial_rows": 6,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/501_600.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/501_600_cleaned.csv"
+    },
+    {
+      "folder": "601_700",
+      "images_processed": 99,
+      "rows_written": 99,
+      "ok_rows": 94,
+      "partial_rows": 5,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/601_700.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/601_700_cleaned.csv"
+    },
+    {
+      "folder": "701_800",
+      "images_processed": 99,
+      "rows_written": 99,
+      "ok_rows": 96,
+      "partial_rows": 3,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/701_800.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/701_800_cleaned.csv"
+    },
+    {
+      "folder": "801_900",
+      "images_processed": 97,
+      "rows_written": 97,
+      "ok_rows": 93,
+      "partial_rows": 4,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/801_900.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/801_900_cleaned.csv"
+    },
+    {
+      "folder": "900_1200",
+      "images_processed": 294,
+      "rows_written": 294,
+      "ok_rows": 285,
+      "partial_rows": 9,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/900_1200.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/900_1200_cleaned.csv"
+    },
+    {
+      "folder": "1201_1300",
+      "images_processed": 97,
+      "rows_written": 97,
+      "ok_rows": 94,
+      "partial_rows": 3,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/1201_1300.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/1201_1300_cleaned.csv"
+    },
+    {
+      "folder": "1301_1530",
+      "images_processed": 226,
+      "rows_written": 226,
+      "ok_rows": 223,
+      "partial_rows": 3,
+      "failed_rows": 0,
+      "raw_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/raw/1301_1530.csv",
+      "cleaned_output_csv": "/Users/onkarj012/Projects/VibeCoding/blo_photo/data/output/cleaned/1301_1530_cleaned.csv"
+    }
+  ]
+}
