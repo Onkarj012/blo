@@ -125,16 +125,24 @@ export const getVoters = query({
     };
     
     // Calculate cluster counts
-    const clusterCounts: Record<string, { total: number; pending: number }> = {};
+    const clusterCountsMap = new Map<string, { areaCluster: string; total: number; pending: number }>();
     for (const voter of allVoters) {
-      if (!clusterCounts[voter.areaCluster]) {
-        clusterCounts[voter.areaCluster] = { total: 0, pending: 0 };
+      if (!clusterCountsMap.has(voter.areaCluster)) {
+        clusterCountsMap.set(voter.areaCluster, {
+          areaCluster: voter.areaCluster,
+          total: 0,
+          pending: 0,
+        });
       }
-      clusterCounts[voter.areaCluster].total++;
+      const cluster = clusterCountsMap.get(voter.areaCluster)!;
+      cluster.total++;
       if (voter.status === "pending") {
-        clusterCounts[voter.areaCluster].pending++;
+        cluster.pending++;
       }
     }
+    const clusterCounts = Array.from(clusterCountsMap.values()).sort((left, right) =>
+      left.areaCluster.localeCompare(right.areaCluster)
+    );
     
     // Calculate hidden vague count
     const hiddenVagueCount = allVoters.filter(
@@ -293,6 +301,16 @@ export const upsertVoter = mutation({
     addressRaw: v.string(),
     displayAddress: v.string(),
     areaCluster: v.string(),
+    areaClusterSource: v.union(
+      v.literal("rule"),
+      v.literal("llm"),
+      v.literal("fallback")
+    ),
+    areaClusterConfidence: v.number(),
+    areaClusterNeedsReview: v.boolean(),
+    areaClusterReasonCode: v.optional(v.string()),
+    areaClusterSuggested: v.optional(v.string()),
+    areaClusterLastClassifiedAt: v.number(),
     addressQuality: v.union(
       v.literal("actionable"),
       v.literal("vague"),
@@ -373,6 +391,16 @@ export const batchUpsertVoters = mutation({
       addressRaw: v.string(),
       displayAddress: v.string(),
       areaCluster: v.string(),
+      areaClusterSource: v.union(
+        v.literal("rule"),
+        v.literal("llm"),
+        v.literal("fallback")
+      ),
+      areaClusterConfidence: v.number(),
+      areaClusterNeedsReview: v.boolean(),
+      areaClusterReasonCode: v.optional(v.string()),
+      areaClusterSuggested: v.optional(v.string()),
+      areaClusterLastClassifiedAt: v.number(),
       addressQuality: v.union(
         v.literal("actionable"),
         v.literal("vague"),
@@ -441,5 +469,103 @@ export const batchUpsertVoters = mutation({
     }
     
     return results;
+  },
+});
+
+export const getVotersForRecluster = query({
+  args: {
+    cursor: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.max(1, Math.min(args.limit ?? 100, 250));
+    const cursor = Math.max(0, args.cursor ?? 0);
+    const allVoters = await ctx.db.query("voters").order("asc").collect();
+    const items = allVoters.slice(cursor, cursor + limit).map((voter) => ({
+      _id: voter._id,
+      addressRaw: voter.addressRaw,
+      displayAddress: voter.displayAddress,
+      areaCluster: voter.areaCluster,
+      areaClusterSource: voter.areaClusterSource,
+      areaClusterConfidence: voter.areaClusterConfidence,
+      areaClusterNeedsReview: voter.areaClusterNeedsReview,
+      areaClusterReasonCode: voter.areaClusterReasonCode,
+      areaClusterSuggested: voter.areaClusterSuggested,
+      areaClusterLastClassifiedAt: voter.areaClusterLastClassifiedAt,
+      addressQuality: voter.addressQuality,
+      geocodeStatus: voter.geocodeStatus,
+      geocodeConfidence: voter.geocodeConfidence,
+      lat: voter.lat,
+      lng: voter.lng,
+    }));
+
+    return {
+      items,
+      nextCursor: cursor + limit < allVoters.length ? cursor + limit : null,
+      total: allVoters.length,
+    };
+  },
+});
+
+export const updateAreaClusterMetadataBatch = mutation({
+  args: {
+    updates: v.array(
+      v.object({
+        voterId: v.id("voters"),
+        areaCluster: v.string(),
+        areaClusterSource: v.union(
+          v.literal("rule"),
+          v.literal("llm"),
+          v.literal("fallback")
+        ),
+        areaClusterConfidence: v.number(),
+        areaClusterNeedsReview: v.boolean(),
+        areaClusterReasonCode: v.optional(v.string()),
+        areaClusterSuggested: v.optional(v.string()),
+        areaClusterLastClassifiedAt: v.number(),
+        addressQuality: v.union(
+          v.literal("actionable"),
+          v.literal("vague"),
+          v.literal("missing")
+        ),
+        lat: v.optional(v.number()),
+        lng: v.optional(v.number()),
+        geocodeStatus: v.union(
+          v.literal("resolved"),
+          v.literal("approximate"),
+          v.literal("failed")
+        ),
+        geocodeConfidence: v.number(),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    let updated = 0;
+
+    for (const update of args.updates) {
+      const voter = await ctx.db.get(update.voterId);
+      if (!voter) {
+        continue;
+      }
+
+      await ctx.db.patch(update.voterId, {
+        areaCluster: update.areaCluster,
+        areaClusterSource: update.areaClusterSource,
+        areaClusterConfidence: update.areaClusterConfidence,
+        areaClusterNeedsReview: update.areaClusterNeedsReview,
+        areaClusterReasonCode: update.areaClusterReasonCode,
+        areaClusterSuggested: update.areaClusterSuggested,
+        areaClusterLastClassifiedAt: update.areaClusterLastClassifiedAt,
+        addressQuality: update.addressQuality,
+        lat: update.lat,
+        lng: update.lng,
+        geocodeStatus: update.geocodeStatus,
+        geocodeConfidence: update.geocodeConfidence,
+        updatedAt: Date.now(),
+      });
+      updated++;
+    }
+
+    return { updated };
   },
 });

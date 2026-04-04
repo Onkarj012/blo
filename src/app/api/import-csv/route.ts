@@ -4,9 +4,10 @@ import { convexClient } from "@/lib/convex-server";
 import { requireAdmin, AuthenticatedRequest } from "@/lib/middleware";
 import { api } from "@convex/_generated/api";
 import { Id } from "@convex/_generated/dataModel";
+import { classifyAreaClusters } from "@/lib/area-clustering";
 import {
   buildDisplayAddress,
-  detectAreaCluster,
+  buildGeocodeQuery,
   determineAddressQuality,
   buildRowFingerprint,
   buildSearchText,
@@ -52,6 +53,15 @@ const REQUIRED_HEADERS = [
 ];
 
 const BATCH_SIZE = 250;
+const CLASSIFIED_CLUSTER_BATCH_SIZE = 40;
+
+type NormalizedCsvRow = {
+  source: CsvRow;
+  normalizedName: string;
+  displayAddress: string;
+  rowFingerprint: string;
+  searchText: string;
+};
 
 function addCorsHeaders(response: NextResponse): NextResponse {
   Object.entries(corsHeaders).forEach(([key, value]) => {
@@ -119,6 +129,13 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
     let totalGeocoded = 0;
     let totalApproximate = 0;
     let totalFailedGeocodes = 0;
+    let totalLlmRows = 0;
+    let usedOpenRouter = false;
+    let attemptedOpenRouter = false;
+    let modelUsed: string | null = null;
+    let modelSource: "env" | "default" | null = null;
+    const existingClusters = await convexClient.query(api.clusters.getAreaClusters, {});
+    const clusterCatalog = new Set(existingClusters);
 
     // Geocode cache
     const geocodeCache = new Map<string, { lat: number; lng: number; status: "resolved" | "approximate" | "failed" }>();
@@ -126,6 +143,7 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
     for (let i = 0; i < records.length; i += BATCH_SIZE) {
       const batch = records.slice(i, i + BATCH_SIZE);
       const votersToUpsert = [];
+      const normalizedRows: NormalizedCsvRow[] = [];
 
       for (const row of batch) {
         // Skip rows with no name
@@ -134,17 +152,74 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
           continue;
         }
 
-        // Normalize data
         const displayAddress = buildDisplayAddress(row.address || "");
-        const areaCluster = detectAreaCluster(row.address || "");
-        const addressQuality = determineAddressQuality(row.address || "", areaCluster);
+        const rowFingerprint = buildRowFingerprint({
+          name: row.name,
+          relativeName: row.relative_name,
+          age: row.age || "",
+          gender: row.gender || "",
+          displayAddress,
+          assemblyConstituency: row.assembly_constituency || "",
+          district: row.district || "",
+        });
+        const searchText = buildSearchText({
+          name: row.name,
+          phoneNumber: row.phone_number,
+          displayAddress,
+          epicNumber: row.epic_number,
+          relativeName: row.relative_name,
+        });
+
+        normalizedRows.push({
+          source: row,
+          normalizedName: cleanText(row.name),
+          displayAddress,
+          rowFingerprint,
+          searchText,
+        });
+      }
+
+      const classifications = [];
+      for (let j = 0; j < normalizedRows.length; j += CLASSIFIED_CLUSTER_BATCH_SIZE) {
+        const slice = normalizedRows.slice(j, j + CLASSIFIED_CLUSTER_BATCH_SIZE);
+        const { results: sliceResults, metadata } = await classifyAreaClusters(
+          slice.map((row, index) => ({
+            rowIndex: j + index,
+            addressRaw: row.source.address || "",
+            displayAddress: row.displayAddress,
+            uniqueKey: row.source.epic_number?.trim() || `${i + j + index}`,
+          }))
+          ,
+          {
+            existingClusters: Array.from(clusterCatalog),
+            forceLlmForActionableRows: true,
+          }
+        );
+        totalLlmRows += metadata.llmRows;
+        usedOpenRouter = usedOpenRouter || metadata.usedOpenRouter;
+        attemptedOpenRouter = attemptedOpenRouter || metadata.attemptedOpenRouter;
+        modelUsed = modelUsed ?? metadata.model;
+        modelSource = modelSource ?? metadata.modelSource;
+        classifications.push(...sliceResults);
+      }
+
+      const classificationByIndex = new Map(
+        classifications.map((classification) => [classification.rowIndex, classification])
+      );
+
+      for (let batchIndex = 0; batchIndex < normalizedRows.length; batchIndex++) {
+        const row = normalizedRows[batchIndex];
+        const source = row.source;
+        const classification = classificationByIndex.get(batchIndex);
+        const areaCluster = classification?.areaCluster ?? "Pimple Saudagar Core";
+        const addressQuality = determineAddressQuality(source.address || "", areaCluster);
 
         // Geocode
         let lat: number | undefined;
         let lng: number | undefined;
         let geocodeStatus: "resolved" | "approximate" | "failed" = "failed";
 
-        const geocodeQueryStr = `${areaCluster}, Pimple Saudagar, Pune, Maharashtra, India`;
+        const geocodeQueryStr = buildGeocodeQuery(areaCluster);
         
         if (geocodeCache.has(geocodeQueryStr)) {
           const cached = geocodeCache.get(geocodeQueryStr)!;
@@ -174,47 +249,41 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
           totalFailedGeocodes++;
         }
 
-        // Build fingerprint
-        const rowFingerprint = buildRowFingerprint({
-          name: row.name,
-          relativeName: row.relative_name,
-          age: row.age || "",
-          gender: row.gender || "",
-          displayAddress,
-          assemblyConstituency: row.assembly_constituency || "",
-          district: row.district || "",
-        });
-
-        // Build search text
-        const searchText = buildSearchText({
-          name: row.name,
-          phoneNumber: row.phone_number,
-          displayAddress,
-          epicNumber: row.epic_number,
-          relativeName: row.relative_name,
-        });
-
         votersToUpsert.push({
-          epicNumber: row.epic_number?.trim() || undefined,
-          rowFingerprint,
-          name: cleanText(row.name),
-          phoneNumber: row.phone_number?.trim() || undefined,
-          age: cleanText(row.age),
-          gender: cleanText(row.gender),
-          relativeName: cleanText(row.relative_name) || undefined,
-          relativeType: cleanText(row.relative_type) || undefined,
-          addressRaw: cleanText(row.address),
-          displayAddress,
+          epicNumber: source.epic_number?.trim() || undefined,
+          rowFingerprint: row.rowFingerprint,
+          name: row.normalizedName,
+          phoneNumber: source.phone_number?.trim() || undefined,
+          age: cleanText(source.age),
+          gender: cleanText(source.gender),
+          relativeName: cleanText(source.relative_name) || undefined,
+          relativeType: cleanText(source.relative_type) || undefined,
+          addressRaw: cleanText(source.address),
+          displayAddress: row.displayAddress,
           areaCluster,
+          areaClusterSource: classification?.source ?? "fallback",
+          areaClusterConfidence: classification?.confidence ?? 0.42,
+          areaClusterNeedsReview: classification?.needsReview ?? true,
+          areaClusterReasonCode: classification?.reasonCode,
+          areaClusterSuggested: classification?.suggestedAreaCluster,
+          areaClusterLastClassifiedAt: Date.now(),
           addressQuality,
-          searchText,
-          assemblyConstituency: cleanText(row.assembly_constituency),
-          district: cleanText(row.district),
+          searchText: row.searchText,
+          assemblyConstituency: cleanText(source.assembly_constituency),
+          district: cleanText(source.district),
           lat,
           lng,
           geocodeStatus,
           geocodeConfidence: calculateGeocodeConfidence(geocodeStatus, addressQuality),
         });
+
+        if (
+          !classification?.needsReview &&
+          classification?.areaCluster &&
+          !classification.areaCluster.startsWith("Uncertain:")
+        ) {
+          clusterCatalog.add(classification.areaCluster);
+        }
       }
 
       // Upsert batch to Convex
@@ -256,6 +325,11 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
           geocoded: totalGeocoded,
           approximate: totalApproximate,
           failedGeocodes: totalFailedGeocodes,
+          usedOpenRouter,
+          attemptedOpenRouter,
+          llmRows: totalLlmRows,
+          model: modelUsed,
+          modelSource,
         },
       },
     });

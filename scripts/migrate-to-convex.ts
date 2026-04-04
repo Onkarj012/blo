@@ -93,6 +93,8 @@ async function migrate() {
         const displayAddress = buildDisplayAddress(voter.address_raw);
         const areaCluster = detectAreaCluster(voter.address_raw);
         const addressQuality = determineAddressQuality(voter.address_raw, areaCluster);
+        const areaClusterSource =
+          areaCluster === "Pimple Saudagar Core" ? ("fallback" as const) : ("rule" as const);
         
         const rowFingerprint = buildRowFingerprint({
           name: voter.name,
@@ -124,6 +126,13 @@ async function migrate() {
           addressRaw: cleanText(voter.address_raw),
           displayAddress,
           areaCluster,
+          areaClusterSource,
+          areaClusterConfidence: areaCluster === "Pimple Saudagar Core" ? 0.42 : 0.9,
+          areaClusterNeedsReview: areaCluster === "Pimple Saudagar Core",
+          areaClusterReasonCode:
+            areaCluster === "Pimple Saudagar Core" ? "fallback_cluster" : "rule_match",
+          areaClusterSuggested: undefined,
+          areaClusterLastClassifiedAt: Date.now(),
           addressQuality,
           searchText,
           assemblyConstituency: cleanText(voter.assembly_constituency),

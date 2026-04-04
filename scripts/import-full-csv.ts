@@ -99,6 +99,8 @@ async function importCSV() {
       const displayAddress = buildDisplayAddress(row.address || "");
       const areaCluster = detectAreaCluster(row.address || "");
       const addressQuality = determineAddressQuality(row.address || "", areaCluster);
+      const areaClusterSource =
+        areaCluster === "Pimple Saudagar Core" ? ("fallback" as const) : ("rule" as const);
 
       // Geocode
       let lat: number | undefined;
@@ -171,6 +173,13 @@ async function importCSV() {
         addressRaw: cleanText(row.address),
         displayAddress,
         areaCluster,
+        areaClusterSource,
+        areaClusterConfidence: areaCluster === "Pimple Saudagar Core" ? 0.42 : 0.9,
+        areaClusterNeedsReview: areaCluster === "Pimple Saudagar Core",
+        areaClusterReasonCode:
+          areaCluster === "Pimple Saudagar Core" ? "fallback_cluster" : "rule_match",
+        areaClusterSuggested: undefined,
+        areaClusterLastClassifiedAt: Date.now(),
         addressQuality,
         searchText,
         assemblyConstituency: cleanText(row.assembly_constituency),

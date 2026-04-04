@@ -22,6 +22,11 @@ import {
   Sun,
   Moon,
   Download,
+  Layers,
+  ChevronUp,
+  MoreHorizontal,
+  FileSpreadsheet,
+  FileText,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -69,6 +74,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import dynamic from "next/dynamic"
@@ -943,6 +954,10 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
                       <List className="size-4" />
                       List
                     </TabsTrigger>
+                    <TabsTrigger value="clusters" className="gap-1">
+                      <Layers className="size-4" />
+                      Clusters
+                    </TabsTrigger>
                     <TabsTrigger value="map" className="gap-1">
                       <MapPin className="size-4" />
                       Map
@@ -1033,6 +1048,14 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
                   )}
                 </TabsContent>
 
+                <TabsContent value="clusters" className="mt-0">
+                  <ClusterView 
+                    voters={filteredVoters}
+                    onUpdateStatus={handleUpdateStatus}
+                    isLoading={isLoading}
+                  />
+                </TabsContent>
+
                 <TabsContent value="map" className="mt-0">
                   <Card className="h-[calc(100vh-16rem)]">
                     <VoterMap 
@@ -1055,4 +1078,347 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
       />
     </div>
   )
+}
+
+// Cluster View Component
+interface ClusterViewProps {
+  voters: Voter[]
+  onUpdateStatus: (voterId: string, status: VoterStatus) => void
+  isLoading: boolean
+}
+
+function ClusterView({ voters, onUpdateStatus, isLoading }: ClusterViewProps) {
+  const [sortBy, setSortBy] = useState<"name" | "count">("count")
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc")
+  const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set())
+
+  // Group voters by cluster
+  const clusters = useMemo(() => {
+    const groups = new Map<string, Voter[]>()
+    voters.forEach((voter) => {
+      const cluster = voter.areaCluster
+      if (!groups.has(cluster)) {
+        groups.set(cluster, [])
+      }
+      groups.get(cluster)!.push(voter)
+    })
+    
+    // Convert to array and sort
+    let sortedClusters = Array.from(groups.entries())
+    
+    sortedClusters.sort((a, b) => {
+      if (sortBy === "name") {
+        const comparison = a[0].localeCompare(b[0])
+        return sortDirection === "asc" ? comparison : -comparison
+      } else {
+        const comparison = a[1].length - b[1].length
+        return sortDirection === "asc" ? comparison : -comparison
+      }
+    })
+    
+    return sortedClusters
+  }, [voters, sortBy, sortDirection])
+
+  const toggleCluster = (clusterName: string) => {
+    setExpandedClusters((prev) => {
+      const next = new Set(prev)
+      if (next.has(clusterName)) {
+        next.delete(clusterName)
+      } else {
+        next.add(clusterName)
+      }
+      return next
+    })
+  }
+
+  const expandAll = () => {
+    setExpandedClusters(new Set(clusters.map(([name]) => name)))
+  }
+
+  const collapseAll = () => {
+    setExpandedClusters(new Set())
+  }
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Card key={i}>
+            <CardHeader className="pb-3">
+              <Skeleton className="h-6 w-48" />
+              <Skeleton className="h-4 w-32" />
+            </CardHeader>
+          </Card>
+        ))}
+      </div>
+    )
+  }
+
+  if (voters.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <Layers className="mb-4 size-12 text-muted-foreground" />
+        <h3 className="text-lg font-semibold">No voters found</h3>
+        <p className="text-sm text-muted-foreground">
+          Try adjusting your filters to see clusters
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Controls */}
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-muted-foreground">
+          {clusters.length} clusters • {voters.length} voters
+        </p>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Sort by:</span>
+            <Select value={sortBy} onValueChange={(value) => setSortBy(value as typeof sortBy)}>
+              <SelectTrigger className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="count">Count</SelectItem>
+                <SelectItem value="name">Name</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSortDirection(sortDirection === "asc" ? "desc" : "asc")}
+              className="h-8 w-8"
+            >
+              {sortDirection === "asc" ? "↑" : "↓"}
+            </Button>
+          </div>
+          <div className="flex gap-1">
+            <Button variant="ghost" size="sm" onClick={expandAll}>
+              Expand All
+            </Button>
+            <Button variant="ghost" size="sm" onClick={collapseAll}>
+              Collapse All
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Cluster List */}
+      <div className="space-y-3">
+        {clusters.map(([clusterName, clusterVoters]) => {
+          const isExpanded = expandedClusters.has(clusterName)
+          const pending = clusterVoters.filter((v) => v.status === "pending").length
+          const done = clusterVoters.filter((v) => v.status === "done").length
+          const revisit = clusterVoters.filter((v) => v.status === "revisit").length
+
+          const handleExportCSV = () => {
+            exportClusterToCSV(clusterName, clusterVoters)
+          }
+
+          const handleExportPDF = () => {
+            exportClusterToPDF(clusterName, clusterVoters)
+          }
+
+          return (
+            <Card key={clusterName} className="overflow-hidden">
+              <div className="w-full p-4 flex items-center justify-between hover:bg-muted/50 transition-colors">
+                <button
+                  onClick={() => toggleCluster(clusterName)}
+                  className="flex items-center gap-4 flex-1 text-left"
+                >
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10 text-primary font-semibold">
+                    {clusterVoters.length}
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-lg">{clusterName}</h3>
+                    <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Clock className="size-3" />
+                        {pending} pending
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <CheckCircle2 className="size-3" />
+                        {done} done
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <RotateCcw className="size-3" />
+                        {revisit} revisit
+                      </span>
+                    </div>
+                  </div>
+                </button>
+                <div className="flex items-center gap-2">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger>
+                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <MoreHorizontal className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={handleExportCSV} className="gap-2">
+                        <FileSpreadsheet className="size-4" />
+                        Export CSV
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleExportPDF} className="gap-2">
+                        <FileText className="size-4" />
+                        Export PDF
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <button
+                    onClick={() => toggleCluster(clusterName)}
+                    className="p-1 hover:bg-muted rounded"
+                  >
+                    {isExpanded ? (
+                      <ChevronUp className="size-5 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="size-5 text-muted-foreground" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {isExpanded && (
+                <div className="border-t bg-muted/30">
+                  <div className="p-4 space-y-3 max-h-[600px] overflow-y-auto">
+                    {clusterVoters.map((voter) => (
+                      <VoterCard
+                        key={voter._id}
+                        voter={voter}
+                        onUpdateStatus={onUpdateStatus}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Card>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// Export functions for single cluster
+function exportClusterToCSV(clusterName: string, voters: Voter[]) {
+  const headers = ["Name", "Phone", "Address", "Status", "Visited", "Age", "Gender"]
+  const rows = voters.map((voter) => [
+    voter.name,
+    voter.phoneNumber || "",
+    voter.displayAddress,
+    voter.status,
+    voter.visited ? "Yes" : "No",
+    voter.age,
+    voter.gender,
+  ])
+
+  const csvContent = [headers, ...rows]
+    .map((row) =>
+      row
+        .map((cell) => {
+          const stringCell = String(cell)
+          if (stringCell.includes(",") || stringCell.includes('"') || stringCell.includes("\n")) {
+            return `"${stringCell.replace(/"/g, '""')}"`
+          }
+          return stringCell
+        })
+        .join(",")
+    )
+    .join("\n")
+
+  const blob = new Blob(["\ufeff" + csvContent], { type: "text/csv;charset=utf-8;" })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.href = url
+  const safeClusterName = clusterName.replace(/[^a-zA-Z0-9]/g, "_")
+  link.download = `cluster_${safeClusterName}_${voters.length}_voters_${new Date().toISOString().split("T")[0]}.csv`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+
+  toast.success(`Exported ${voters.length} voters from ${clusterName} to CSV`)
+}
+
+function exportClusterToPDF(clusterName: string, voters: Voter[]) {
+  import("jspdf").then(({ default: jsPDF }) => {
+    import("jspdf-autotable").then(({ default: autoTable }) => {
+      const doc = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+      })
+
+      // Header
+      doc.setFontSize(16)
+      doc.setFont("helvetica", "bold")
+      doc.text(`Cluster: ${clusterName}`, 14, 20)
+
+      doc.setFontSize(10)
+      doc.setFont("helvetica", "normal")
+      doc.text(`Total Voters: ${voters.length}`, 14, 28)
+      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 33)
+
+      // Table
+      const headers = [["Name", "Phone", "Address", "Status", "Age"]]
+      const body = voters.map((voter) => [
+        voter.name,
+        voter.phoneNumber || "-",
+        voter.displayAddress,
+        voter.status,
+        voter.age,
+      ])
+
+      autoTable(doc, {
+        head: headers,
+        body,
+        startY: 40,
+        theme: "grid", // Changed to 'grid' for hard borders
+        headStyles: {
+          fillColor: [41, 128, 185],
+          textColor: [0, 0, 0], // Black text
+          fontStyle: "bold",
+          fontSize: 9,
+          lineColor: [0, 0, 0], // Black borders
+          lineWidth: 0.5,
+        },
+        bodyStyles: {
+          fontSize: 8,
+          textColor: [0, 0, 0], // Black text
+          lineColor: [0, 0, 0], // Black borders
+          lineWidth: 0.5,
+        },
+        alternateRowStyles: {
+          fillColor: [245, 245, 245],
+          textColor: [0, 0, 0], // Black text
+        },
+        margin: { top: 10, right: 14, bottom: 10, left: 14 },
+        styles: {
+          overflow: "linebreak",
+          cellWidth: "auto",
+          textColor: [0, 0, 0], // Black text
+          lineColor: [0, 0, 0], // Black borders for all cells
+          lineWidth: 0.5,
+        },
+        didDrawPage: (data) => {
+          const pageCount = doc.getNumberOfPages()
+          const currentPage = data.pageNumber
+          doc.setFontSize(8)
+          doc.setFont("helvetica", "normal")
+          doc.text(
+            `Page ${currentPage} of ${pageCount}`,
+            doc.internal.pageSize.getWidth() - 30,
+            doc.internal.pageSize.getHeight() - 10
+          )
+        },
+      })
+
+      const safeClusterName = clusterName.replace(/[^a-zA-Z0-9]/g, "_")
+      doc.save(`cluster_${safeClusterName}_${voters.length}_voters_${new Date().toISOString().split("T")[0]}.pdf`)
+
+      toast.success(`Exported ${voters.length} voters from ${clusterName} to PDF`)
+    })
+  })
 }

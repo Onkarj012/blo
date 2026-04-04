@@ -104,12 +104,21 @@ export const getMapClusters = query({
 
 // Query to get all unique area clusters
 export const getAreaClusters = query({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    classifiedAfter: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
     const voters = await ctx.db.query("voters").collect();
     const clusters = new Set<string>();
     
     for (const voter of voters) {
+      if (
+        args.classifiedAfter !== undefined &&
+        (voter.areaClusterLastClassifiedAt === undefined ||
+          voter.areaClusterLastClassifiedAt < args.classifiedAfter)
+      ) {
+        continue;
+      }
       clusters.add(voter.areaCluster);
     }
     

@@ -95,9 +95,11 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
   const [blankColumnCount, setBlankColumnCount] = useState<number>(0)
   const [blankColumnHeaders, setBlankColumnHeaders] = useState<boolean>(false)
   const [blankColumnPattern, setBlankColumnPattern] = useState<string>("Notes {n}")
+  const [blankColumnWidth, setBlankColumnWidth] = useState<number>(15) // Width in character spaces (default ~1 inch)
   
   // PDF options
-  const [pdfLayout, setPdfLayout] = useState<"portrait" | "landscape" | "letter">("portrait")
+  const [pdfPageSize, setPdfPageSize] = useState<"a4" | "letter" | "legal">("a4")
+  const [pdfOrientation, setPdfOrientation] = useState<"portrait" | "landscape">("portrait")
   const [includeTitle, setIncludeTitle] = useState(true)
   const [includeTimestamp, setIncludeTimestamp] = useState(true)
   const [includeFilters, setIncludeFilters] = useState(true)
@@ -309,8 +311,8 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
 
     setIsExporting(true)
     try {
-      const pageSize = pdfLayout === "letter" ? "letter" : "a4"
-      const orientation = pdfLayout === "landscape" ? "landscape" : "portrait"
+      const pageSize = pdfPageSize
+      const orientation = pdfOrientation
 
       const doc = new jsPDF({
         orientation,
@@ -472,28 +474,49 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
       [...getVoterRowData(voter), ...Array(blankColumnCount).fill("")]
     )
 
+    // Calculate column styles for blank columns based on character width
+    // Each character space is approximately 2.5mm wide
+    const columnStyles: { [key: number]: { cellWidth: number } } = {}
+    const dataColumnCount = headers.length - blankColumnCount
+    const blankColumnWidthMm = blankColumnWidth * 2.5 // Convert character count to mm
+    
+    // Set custom width for each blank column
+    for (let i = 0; i < blankColumnCount; i++) {
+      columnStyles[dataColumnCount + i] = { cellWidth: blankColumnWidthMm }
+    }
+
     autoTable(doc, {
       head: [headers],
       body,
       startY,
-      theme: "striped",
+      theme: "grid", // Changed to 'grid' for hard borders
       headStyles: {
         fillColor: [41, 128, 185],
-        textColor: 255,
+        textColor: [0, 0, 0], // Black text
         fontStyle: "bold",
         fontSize: 9,
+        lineColor: [0, 0, 0], // Black borders
+        lineWidth: 0.5,
       },
       bodyStyles: {
         fontSize: 8,
+        textColor: [0, 0, 0], // Black text
+        lineColor: [0, 0, 0], // Black borders
+        lineWidth: 0.5,
       },
       alternateRowStyles: {
         fillColor: [245, 245, 245],
+        textColor: [0, 0, 0], // Black text
       },
       margin: { top: 10, right: 14, bottom: 10, left: 14 },
       styles: {
         overflow: "linebreak",
         cellWidth: "auto",
+        textColor: [0, 0, 0], // Black text for all cells
+        lineColor: [0, 0, 0], // Black borders for all cells
+        lineWidth: 0.5,
       },
+      columnStyles,
       didDrawPage: !isGrouped ? (data) => {
         const pageCount = doc.getNumberOfPages()
         const currentPage = data.pageNumber
@@ -526,11 +549,11 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
   const SectionHeader = ({ title, section, icon: Icon }: { title: string; section: string; icon: any }) => (
     <button
       onClick={() => toggleSection(section)}
-      className="flex items-center justify-between w-full py-3 px-4 bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+      className="flex items-center justify-between w-full py-4 px-6 bg-muted/50 hover:bg-muted rounded-lg transition-colors"
     >
       <div className="flex items-center gap-3">
         {Icon && <Icon className="size-5 text-muted-foreground" />}
-        <span className="font-semibold">{title}</span>
+        <span className="font-semibold text-lg">{title}</span>
       </div>
       {expandedSections.has(section) ? (
         <ChevronUp className="size-5 text-muted-foreground" />
@@ -542,24 +565,24 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[95vh] overflow-y-auto p-0">
-        <DialogHeader className="px-6 pt-6 pb-4 border-b">
-          <DialogTitle className="flex items-center gap-3 text-xl">
+      <DialogContent className="max-w-[90vw] xl:max-w-6xl max-h-[90vh] overflow-y-auto p-0">
+        <DialogHeader className="px-8 pt-8 pb-6 border-b">
+          <DialogTitle className="flex items-center gap-3 text-2xl">
             <Download className="size-6" />
             Export Voters
           </DialogTitle>
-          <DialogDescription className="text-base">
+          <DialogDescription className="text-base mt-2">
             Export {voters.length} filtered voters with your selected columns and options
           </DialogDescription>
         </DialogHeader>
 
-        <div className="p-6 space-y-6">
+        <div className="px-8 py-6 space-y-8">
           {/* Column Selection Section */}
           <div className="space-y-4">
             <SectionHeader title="Column Selection" section="columns" icon={Layers} />
             
             {expandedSections.has("columns") && (
-              <div className="px-4 pt-2 space-y-4">
+              <div className="px-6 pt-4 space-y-5">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">
                     {activeColumnCount} of {columns.length} data columns selected
@@ -574,22 +597,23 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 p-4 bg-muted/30 rounded-lg">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-x-6 gap-y-3 p-4 bg-muted/30 rounded-lg">
                   {columns.map((column) => (
-                    <div key={column.key} className="flex items-center gap-3">
+                    <div key={column.key} className="flex items-center gap-2 min-w-0">
                       <Checkbox
                         id={`col-${column.key}`}
                         checked={selectedColumns.includes(column.key as string)}
                         onCheckedChange={() => handleColumnToggle(column.key as string)}
+                        className="shrink-0"
                       />
                       <Label
                         htmlFor={`col-${column.key}`}
-                        className="text-sm font-normal cursor-pointer"
+                        className="text-sm font-normal cursor-pointer truncate"
                       >
                         {column.label}
                       </Label>
                       {column.default && (
-                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">
                           Default
                         </Badge>
                       )}
@@ -607,8 +631,8 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
             <SectionHeader title="Blank Columns" section="blank" icon={Layers} />
             
             {expandedSections.has("blank") && (
-              <div className="px-4 pt-2 space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="px-6 pt-4 space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                   <div className="space-y-3">
                     <Label htmlFor="blank-count">Number of Blank Columns</Label>
                     <Input
@@ -623,6 +647,29 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
                       Add empty columns for manual notes
                     </p>
                   </div>
+
+                  {blankColumnCount > 0 && (
+                    <div className="space-y-3">
+                      <Label htmlFor="blank-width">Blank Column Width</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="blank-width"
+                          type="number"
+                          min={1}
+                          max={50}
+                          value={blankColumnWidth}
+                          onChange={(e) => setBlankColumnWidth(Math.max(1, Math.min(50, parseInt(e.target.value) || 15)))}
+                          placeholder="Character spaces"
+                        />
+                        <span className="text-sm text-muted-foreground whitespace-nowrap">
+                          chars
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        ≈ {Math.round(blankColumnWidth * 2.5)}mm ({(blankColumnWidth * 2.5 / 25.4).toFixed(1)} inches)
+                      </p>
+                    </div>
+                  )}
 
                   <div className="space-y-3">
                     <div className="flex items-center space-x-3">
@@ -683,9 +730,9 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
             <SectionHeader title="Export Options" section="options" icon={FileText} />
             
             {expandedSections.has("options") && (
-              <div className="px-4 pt-2 space-y-6">
+              <div className="px-6 pt-4 space-y-6">
                 <Tabs defaultValue="csv" className="w-full">
-                  <TabsList className="grid w-full grid-cols-3">
+                  <TabsList className="grid w-full grid-cols-3 h-12">
                     <TabsTrigger value="csv" className="gap-2">
                       <FileSpreadsheet className="size-4" />
                       CSV
@@ -731,20 +778,36 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
 
                   {/* PDF Options */}
                   <TabsContent value="pdf" className="space-y-6 mt-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       <div className="space-y-3">
-                        <Label>Page Layout</Label>
+                        <Label>Page Size</Label>
                         <Select
-                          value={pdfLayout}
-                          onValueChange={(value) => setPdfLayout(value as typeof pdfLayout)}
+                          value={pdfPageSize}
+                          onValueChange={(value) => setPdfPageSize(value as typeof pdfPageSize)}
                         >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="portrait">A4 Portrait</SelectItem>
-                            <SelectItem value="landscape">A4 Landscape</SelectItem>
-                            <SelectItem value="letter">Letter Size</SelectItem>
+                            <SelectItem value="a4">A4</SelectItem>
+                            <SelectItem value="letter">Letter</SelectItem>
+                            <SelectItem value="legal">Legal</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-3">
+                        <Label>Orientation</Label>
+                        <Select
+                          value={pdfOrientation}
+                          onValueChange={(value) => setPdfOrientation(value as typeof pdfOrientation)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="portrait">Portrait</SelectItem>
+                            <SelectItem value="landscape">Landscape</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -806,16 +869,49 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
 
                   {/* Grouped Options */}
                   <TabsContent value="grouped" className="space-y-6 mt-6">
-                    <div className="bg-muted/30 p-6 rounded-lg space-y-4">
-                      <h4 className="font-semibold">Group by: Area</h4>
+                    <div className="bg-muted/30 p-6 rounded-lg space-y-3">
+                      <h4 className="font-semibold text-base">Group by: Area</h4>
                       <p className="text-sm text-muted-foreground">
                         Voters will be organized by their area/cluster, with each area on a separate page/section.
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                      <div className="space-y-3">
+                        <Label className="text-sm font-medium">Page Size</Label>
+                        <Select
+                          value={pdfPageSize}
+                          onValueChange={(value) => setPdfPageSize(value as typeof pdfPageSize)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="a4">A4</SelectItem>
+                            <SelectItem value="letter">Letter</SelectItem>
+                            <SelectItem value="legal">Legal</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-3">
+                        <Label className="text-sm font-medium">Orientation</Label>
+                        <Select
+                          value={pdfOrientation}
+                          onValueChange={(value) => setPdfOrientation(value as typeof pdfOrientation)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="portrait">Portrait</SelectItem>
+                            <SelectItem value="landscape">Landscape</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
                       <div className="space-y-4">
-                        <Label>Sort Areas By</Label>
+                        <Label className="text-sm font-medium">Sort Areas By</Label>
                         <div className="flex gap-3">
                           <Select
                             value={sortGroupsBy}
@@ -833,48 +929,48 @@ export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDial
                             value={sortDirection}
                             onValueChange={(value) => setSortDirection(value as typeof sortDirection)}
                           >
-                            <SelectTrigger className="w-[120px]">
+                            <SelectTrigger className="w-28">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="asc">Ascending</SelectItem>
-                              <SelectItem value="desc">Descending</SelectItem>
+                              <SelectItem value="asc">Asc</SelectItem>
+                              <SelectItem value="desc">Desc</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
                       </div>
 
-                      <div className="space-y-4">
-                        <Label>PDF Options</Label>
-                        <div className="space-y-3">
-                          <div className="flex items-center space-x-3">
+                      <div className="space-y-3">
+                        <Label className="text-sm font-medium">PDF Options</Label>
+                        <div className="space-y-2">
+                          <div className="flex items-center space-x-2">
                             <Checkbox
                               id="new-page"
                               checked={newPagePerGroup}
                               onCheckedChange={(checked) => setNewPagePerGroup(checked as boolean)}
                             />
-                            <Label htmlFor="new-page" className="font-normal">
-                              Start each area on new page
+                            <Label htmlFor="new-page" className="font-normal text-sm">
+                              New page per area
                             </Label>
                           </div>
-                          <div className="flex items-center space-x-3">
+                          <div className="flex items-center space-x-2">
                             <Checkbox
                               id="group-header"
                               checked={includeGroupHeader}
                               onCheckedChange={(checked) => setIncludeGroupHeader(checked as boolean)}
                             />
-                            <Label htmlFor="group-header" className="font-normal">
-                              Include area header with stats
+                            <Label htmlFor="group-header" className="font-normal text-sm">
+                              Area headers
                             </Label>
                           </div>
-                          <div className="flex items-center space-x-3">
+                          <div className="flex items-center space-x-2">
                             <Checkbox
                               id="summary-page"
                               checked={includeSummaryPage}
                               onCheckedChange={(checked) => setIncludeSummaryPage(checked as boolean)}
                             />
-                            <Label htmlFor="summary-page" className="font-normal">
-                              Include summary page
+                            <Label htmlFor="summary-page" className="font-normal text-sm">
+                              Summary page
                             </Label>
                           </div>
                         </div>

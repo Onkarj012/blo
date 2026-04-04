@@ -20,6 +20,17 @@ export default defineSchema({
     addressRaw: v.string(),
     displayAddress: v.string(),
     areaCluster: v.string(),
+    // Widened for migration: old voter docs won't have these until re-cluster backfill runs.
+    areaClusterSource: v.optional(v.union(
+      v.literal("rule"),
+      v.literal("llm"),
+      v.literal("fallback")
+    )),
+    areaClusterConfidence: v.optional(v.number()),
+    areaClusterNeedsReview: v.optional(v.boolean()),
+    areaClusterReasonCode: v.optional(v.string()),
+    areaClusterSuggested: v.optional(v.string()),
+    areaClusterLastClassifiedAt: v.optional(v.number()),
     addressQuality: v.union(
       v.literal("actionable"),
       v.literal("vague"),
