@@ -569,3 +569,19 @@ export const updateAreaClusterMetadataBatch = mutation({
     return { updated };
   },
 });
+
+// Manual area cluster override — skipped by recluster pipeline (source = "manual")
+export const updateAreaCluster = mutation({
+  args: {
+    id: v.id("voters"),
+    areaCluster: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, {
+      areaCluster: args.areaCluster,
+      areaClusterSource: "manual",
+      areaClusterNeedsReview: false,
+      areaClusterSuggested: undefined,
+    });
+  },
+});

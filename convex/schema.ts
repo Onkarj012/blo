@@ -24,7 +24,8 @@ export default defineSchema({
     areaClusterSource: v.optional(v.union(
       v.literal("rule"),
       v.literal("llm"),
-      v.literal("fallback")
+      v.literal("fallback"),
+      v.literal("manual")
     )),
     areaClusterConfidence: v.optional(v.number()),
     areaClusterNeedsReview: v.optional(v.boolean()),
