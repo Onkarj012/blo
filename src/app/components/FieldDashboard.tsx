@@ -1,113 +1,57 @@
 "use client"
 
 import { useState, useMemo, useEffect, useCallback, memo, useRef } from "react"
-
 import {
-  MapPin,
-  List,
-  Filter,
-  Search,
-  User,
-  Phone,
-  MapPinned,
-  CheckCircle2,
-  Clock,
-  RotateCcw,
-  AlertCircle,
-  X,
-  ChevronDown,
-  LogOut,
-  Upload,
-  Navigation,
-  Sun,
-  Moon,
-  Download,
-  Layers,
-  ChevronUp,
-  MoreHorizontal,
-  FileSpreadsheet,
-  FileText,
+  MapPin, List, Filter, Search, User, Phone, MapPinned,
+  CheckCircle2, Clock, RotateCcw, AlertCircle, X, ChevronDown,
+  LogOut, Upload, Navigation, Sun, Moon, Download, ChevronUp,
+  MoreHorizontal, FileSpreadsheet, FileText, Edit2, AlertTriangle,
 } from "lucide-react"
-
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  CardFooter,
-} from "@/components/ui/card"
+import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet"
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
 import { ExportDialog } from "./ExportDialog"
+import { downloadAreaCSV, downloadAreaPDF } from "@/lib/export/engine"
 
 interface VoterMapProps {
   voters: Voter[]
   userLocation: { lat: number; lng: number } | null
 }
 
-// Dynamic import for map to avoid SSR issues
 const VoterMap = dynamic<VoterMapProps>(() => import("./VoterMap"), {
   ssr: false,
   loading: () => (
     <div className="flex h-full items-center justify-center">
       <div className="text-center">
         <MapPin className="mx-auto mb-4 size-12 text-muted-foreground animate-pulse" />
-        <p className="text-muted-foreground">Loading map...</p>
+        <p className="text-muted-foreground">Loading map…</p>
       </div>
     </div>
   ),
 })
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
 type VoterStatus = "pending" | "done" | "locked" | "revisit" | "wrong_address"
 type UserRole = "admin" | "user"
 type VisitedFilter = "all" | "visited" | "unvisited"
-type Gender = "male" | "female" | "other"
 
 interface Voter {
   _id: string
@@ -125,6 +69,19 @@ interface Voter {
   distance?: number
   lat?: number
   lng?: number
+  addressQuality?: "actionable" | "vague" | "missing"
+  areaClusterNeedsReview?: boolean
+  areaClusterSuggested?: string
+}
+
+interface ClusterSummary {
+  name: string
+  total: number
+  pending: number
+  done: number
+  locked: number
+  revisit: number
+  wrong_address: number
 }
 
 interface SessionPayload {
@@ -143,15 +100,32 @@ interface Filters {
   gender: string
   minAge: string
   maxAge: string
-  areaCluster: string
   phoneOnly: boolean
   includeVague: boolean
   includeMissing: boolean
+  needsReview: boolean
 }
 
 interface FieldDashboardProps {
   user: SessionPayload
 }
+
+const INITIAL_FILTERS: Filters = {
+  status: "all",
+  visited: "all",
+  name: "",
+  phone: "",
+  address: "",
+  gender: "",
+  minAge: "",
+  maxAge: "",
+  phoneOnly: false,
+  includeVague: false,
+  includeMissing: false,
+  needsReview: false,
+}
+
+// ── Status config ──────────────────────────────────────────────────────────────
 
 const statusConfig: Record<VoterStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: React.ReactNode }> = {
   pending: { label: "Pending", variant: "secondary", icon: <Clock className="size-3" /> },
@@ -161,40 +135,48 @@ const statusConfig: Record<VoterStatus, { label: string; variant: "default" | "s
   wrong_address: { label: "Wrong Address", variant: "destructive", icon: <AlertCircle className="size-3" /> },
 }
 
-function StatCard({
-  title,
-  count,
-  icon,
-  variant = "default",
-}: {
-  title: string
-  count: number
-  icon: React.ReactNode
+// ── StatCard ───────────────────────────────────────────────────────────────────
+
+function StatCard({ title, count, icon, variant = "default" }: {
+  title: string; count: number; icon: React.ReactNode
   variant?: "default" | "secondary" | "destructive" | "outline"
 }) {
-  const variantStyles = {
+  const styles = {
     default: "bg-primary/15 text-primary",
     secondary: "bg-secondary text-secondary-foreground",
     destructive: "bg-destructive/15 text-destructive",
-    outline: "bg-muted text-muted-foreground"
+    outline: "bg-muted text-muted-foreground",
   }
-
   return (
-    <Card className="flex-1 hover:shadow-md transition-shadow">
-      <CardContent className="flex items-center justify-between p-5">
+    <Card className="flex-none min-w-[148px] sm:flex-1 sm:min-w-0 hover:shadow-md transition-shadow glass-surface">
+      <CardContent className="flex items-center justify-between p-4 sm:p-5">
         <div className="flex items-center gap-4">
-          <div className={`rounded-xl p-3 ${variantStyles[variant]}`}>
-            {icon}
-          </div>
+          <div className={`rounded-xl p-3 ${styles[variant]}`}>{icon}</div>
           <div>
             <p className="text-sm font-medium text-muted-foreground mb-1">{title}</p>
-            <p className="text-3xl font-bold tracking-tight">{count}</p>
+            <p className="text-3xl font-bold tracking-tight tabular-nums">{count}</p>
           </div>
         </div>
       </CardContent>
     </Card>
   )
 }
+
+// ── VoterRowSkeleton ──────────────────────────────────────────────────────────
+
+function VoterRowSkeleton() {
+  return (
+    <div className="flex items-center gap-3 px-3 py-2.5 border rounded-lg">
+      <div className="flex-1 space-y-1.5">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-3 w-60" />
+      </div>
+      <Skeleton className="h-7 w-14" />
+    </div>
+  )
+}
+
+// ── VoterCardSkeleton ──────────────────────────────────────────────────────────
 
 function VoterCardSkeleton() {
   return (
@@ -210,10 +192,7 @@ function VoterCardSkeleton() {
       </CardHeader>
       <CardContent className="pb-3">
         <div className="grid grid-cols-2 gap-2 text-sm">
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-full" />
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-4 w-full" />)}
         </div>
       </CardContent>
       <CardFooter className="flex gap-2 pt-0">
@@ -224,65 +203,104 @@ function VoterCardSkeleton() {
   )
 }
 
-// Virtualized list component for performance
-function VirtualizedVoterList({
-  voters,
-  onUpdateStatus,
-}: {
+// ── VoterRow ──────────────────────────────────────────────────────────────────
+
+const VoterRow = memo(({ voter, onUpdateStatus }: {
+  voter: Voter
+  onUpdateStatus?: (id: string, s: VoterStatus) => void
+}) => {
+  const status = statusConfig[voter.status]
+  const needsReview = voter.areaClusterNeedsReview || voter.areaCluster.startsWith("Uncertain:")
+
+  return (
+    <div className="flex items-center gap-3 px-3 py-2.5 border rounded-lg hover:bg-muted/30 transition-colors border-l-4 border-l-transparent hover:border-l-primary">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="font-medium text-sm">{voter.name}</span>
+          {needsReview && <AlertTriangle className="size-3 text-amber-500 shrink-0" />}
+          <Badge variant={status.variant} className="gap-1 px-1.5 py-0 text-[10px] shrink-0">
+            {status.icon} {status.label}
+          </Badge>
+        </div>
+        <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground">
+          <span className="truncate max-w-[160px] sm:max-w-xs">{voter.areaCluster}</span>
+          <span className="shrink-0">·</span>
+          <span className="shrink-0">{voter.age}y</span>
+          <span className="shrink-0 capitalize">{voter.gender.charAt(0).toUpperCase()}</span>
+          {voter.phoneNumber && (
+            <>
+              <span className="shrink-0">·</span>
+              <span className="shrink-0 font-mono">{voter.phoneNumber}</span>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        {voter.phoneNumber && (
+          <a href={`tel:${voter.phoneNumber}`}>
+            <Button variant="ghost" size="icon" className="size-7"><Phone className="size-3.5" /></Button>
+          </a>
+        )}
+        <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(voter.displayAddress)}`} target="_blank" rel="noopener noreferrer">
+          <Button variant="ghost" size="icon" className="size-7"><Navigation className="size-3.5" /></Button>
+        </a>
+        {voter.status !== "done" ? (
+          <Button size="sm" className="h-7 text-xs px-2.5" onClick={() => onUpdateStatus?.(voter._id, "done")}>
+            Done
+          </Button>
+        ) : (
+          <span className="text-xs font-medium text-primary flex items-center gap-1 px-1">
+            <CheckCircle2 className="size-3.5" />Done
+          </span>
+        )}
+      </div>
+    </div>
+  )
+})
+VoterRow.displayName = "VoterRow"
+
+// ── VirtualizedVoterList ───────────────────────────────────────────────────────
+
+function VirtualizedVoterList({ voters, onUpdateStatus, onUpdateArea, areaNames, detailView }: {
   voters: Voter[]
-  onUpdateStatus?: (voterId: string, status: VoterStatus) => void
+  onUpdateStatus?: (id: string, s: VoterStatus) => void
+  onUpdateArea?: (id: string, area: string) => void
+  areaNames: string[]
+  detailView: boolean
 }) {
-  const ITEM_HEIGHT = 280 // Approximate height of each voter card
-  const OVERSCAN = 5 // Number of items to render above/below viewport
+  const ITEM_HEIGHT = detailView ? 300 : 65
+  const OVERSCAN = 5
   const containerRef = useRef<HTMLDivElement>(null)
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 })
 
   useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-
-    const updateVisibleRange = () => {
-      const scrollTop = container.scrollTop
-      const containerHeight = container.clientHeight
-      const start = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN)
-      const end = Math.min(
-        voters.length,
-        Math.ceil((scrollTop + containerHeight) / ITEM_HEIGHT) + OVERSCAN
-      )
+    const el = containerRef.current
+    if (!el) return
+    const update = () => {
+      const top = el.scrollTop
+      const h = el.clientHeight
+      const start = Math.max(0, Math.floor(top / ITEM_HEIGHT) - OVERSCAN)
+      const end = Math.min(voters.length, Math.ceil((top + h) / ITEM_HEIGHT) + OVERSCAN)
       setVisibleRange({ start, end })
     }
-
-    updateVisibleRange()
-    container.addEventListener("scroll", updateVisibleRange)
-    window.addEventListener("resize", updateVisibleRange)
-
-    return () => {
-      container.removeEventListener("scroll", updateVisibleRange)
-      window.removeEventListener("resize", updateVisibleRange)
-    }
+    update()
+    el.addEventListener("scroll", update)
+    window.addEventListener("resize", update)
+    return () => { el.removeEventListener("scroll", update); window.removeEventListener("resize", update) }
   }, [voters.length])
 
   const totalHeight = voters.length * ITEM_HEIGHT
-  const visibleVoters = voters.slice(visibleRange.start, visibleRange.end)
+  const visible = voters.slice(visibleRange.start, visibleRange.end)
 
   return (
-    <div
-      ref={containerRef}
-      className="relative overflow-auto"
-      style={{ height: "calc(100vh - 20rem)" }}
-    >
+    <div ref={containerRef} className="relative overflow-auto" style={{ height: "calc(100dvh - 18rem)" }}>
       <div style={{ height: totalHeight, position: "relative" }}>
-        {visibleVoters.map((voter, index) => (
-          <div
-            key={voter._id}
-            style={{
-              position: "absolute",
-              top: (visibleRange.start + index) * ITEM_HEIGHT,
-              left: 0,
-              right: 0,
-            }}
-          >
-            <VoterCard voter={voter} onUpdateStatus={onUpdateStatus} />
+        {visible.map((voter, i) => (
+          <div key={voter._id} style={{ position: "absolute", top: (visibleRange.start + i) * ITEM_HEIGHT, left: 0, right: 0, paddingBottom: "8px" }}>
+            {detailView
+              ? <VoterCard voter={voter} onUpdateStatus={onUpdateStatus} onUpdateArea={onUpdateArea} areaNames={areaNames} />
+              : <VoterRow voter={voter} onUpdateStatus={onUpdateStatus} />
+            }
           </div>
         ))}
       </div>
@@ -290,8 +308,101 @@ function VirtualizedVoterList({
   )
 }
 
-const VoterCard = memo(({ voter, onUpdateStatus }: { voter: Voter; onUpdateStatus?: (voterId: string, status: VoterStatus) => void }) => {
+// ── GroupedVoterList ───────────────────────────────────────────────────────────
+
+function GroupedVoterList({ voters, onUpdateStatus, onUpdateArea, areaNames, detailView }: {
+  voters: Voter[]
+  onUpdateStatus?: (id: string, s: VoterStatus) => void
+  onUpdateArea?: (id: string, area: string) => void
+  areaNames: string[]
+  detailView: boolean
+}) {
+  const groups = useMemo(() => {
+    const map = new Map<string, Voter[]>()
+    voters.forEach(v => {
+      if (!map.has(v.areaCluster)) map.set(v.areaCluster, [])
+      map.get(v.areaCluster)!.push(v)
+    })
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  }, [voters])
+
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(groups.map(([n]) => n)))
+
+  const toggle = (name: string) =>
+    setExpanded(prev => { const s = new Set(prev); s.has(name) ? s.delete(name) : s.add(name); return s })
+
+  return (
+    <div className="overflow-auto space-y-3" style={{ height: "calc(100dvh - 18rem)" }}>
+      {groups.map(([area, areaVoters]) => {
+        const isOpen = expanded.has(area)
+        const pending = areaVoters.filter(v => v.status === "pending").length
+        const done = areaVoters.filter(v => v.status === "done").length
+        const revisit = areaVoters.filter(v => v.status === "revisit").length
+
+        return (
+          <div key={area} className="rounded-xl border overflow-hidden">
+            <div className="flex items-center justify-between p-3.5 hover:bg-muted/50 transition-colors">
+              <button onClick={() => toggle(area)} className="flex items-center gap-3 flex-1 text-left">
+                <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary font-semibold text-sm tabular-nums shrink-0">
+                  {areaVoters.length}
+                </div>
+                <div>
+                  <p className="font-semibold">{area}</p>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+                    <span className="flex items-center gap-1"><Clock className="size-3" />{pending}</span>
+                    <span className="flex items-center gap-1"><CheckCircle2 className="size-3" />{done}</span>
+                    <span className="flex items-center gap-1"><RotateCcw className="size-3" />{revisit}</span>
+                  </div>
+                </div>
+              </button>
+              <div className="flex items-center gap-1.5">
+                <DropdownMenu>
+                  <DropdownMenuTrigger className="inline-flex items-center justify-center size-8 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors">
+                    <MoreHorizontal className="size-4" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => downloadAreaCSV(area, areaVoters)} className="gap-2">
+                      <FileSpreadsheet className="size-4" />Export CSV
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => downloadAreaPDF(area, areaVoters)} className="gap-2">
+                      <FileText className="size-4" />Export PDF
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <button onClick={() => toggle(area)} className="p-1 hover:bg-muted rounded">
+                  {isOpen ? <ChevronUp className="size-4 text-muted-foreground" /> : <ChevronDown className="size-4 text-muted-foreground" />}
+                </button>
+              </div>
+            </div>
+            {isOpen && (
+              <div className={`border-t bg-muted/20 p-3 ${detailView ? "space-y-3" : "space-y-1.5"}`}>
+                {areaVoters.map(voter => detailView
+                  ? <VoterCard key={voter._id} voter={voter} onUpdateStatus={onUpdateStatus} onUpdateArea={onUpdateArea} areaNames={areaNames} />
+                  : <VoterRow key={voter._id} voter={voter} onUpdateStatus={onUpdateStatus} />
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── VoterCard ──────────────────────────────────────────────────────────────────
+
+const VoterCard = memo(({ voter, onUpdateStatus, onUpdateArea, areaNames }: {
+  voter: Voter
+  onUpdateStatus?: (id: string, s: VoterStatus) => void
+  onUpdateArea?: (id: string, area: string) => void
+  areaNames: string[]
+}) => {
   const status = statusConfig[voter.status]
+  const needsReview = voter.areaClusterNeedsReview || voter.areaCluster.startsWith("Uncertain:")
+  const [areaOpen, setAreaOpen] = useState(false)
+  const [areaSearch, setAreaSearch] = useState("")
+
+  const filteredAreas = areaNames.filter(a => a.toLowerCase().includes(areaSearch.toLowerCase()))
 
   return (
     <Card className="hover:shadow-md transition-shadow border-l-4 border-l-transparent hover:border-l-primary">
@@ -299,25 +410,60 @@ const VoterCard = memo(({ voter, onUpdateStatus }: { voter: Voter; onUpdateStatu
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
             <CardTitle className="text-lg font-semibold leading-tight mb-1">{voter.name}</CardTitle>
-            <CardDescription className="text-sm leading-relaxed line-clamp-2">
-              {voter.displayAddress}
-            </CardDescription>
+            <CardDescription className="text-sm leading-relaxed line-clamp-2">{voter.displayAddress}</CardDescription>
           </div>
-          <Badge variant={status.variant} className="gap-1.5 px-2.5 py-1 text-xs font-medium shrink-0">
-            {status.icon}
-            {status.label}
-          </Badge>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {needsReview && (
+              <Badge variant="outline" className="gap-1 text-[10px] px-1.5 py-0.5 text-amber-500 border-amber-500/50">
+                <AlertTriangle className="size-3" /> Review
+              </Badge>
+            )}
+            <Badge variant={status.variant} className="gap-1.5 px-2.5 py-1 text-xs font-medium">
+              {status.icon} {status.label}
+            </Badge>
+          </div>
         </div>
       </CardHeader>
+
       <CardContent className="pb-4">
         <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-sm">
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground font-medium min-w-[40px]">Area:</span>
-            <span className="text-foreground">{voter.areaCluster}</span>
+            <span className="text-foreground truncate">{voter.areaCluster}</span>
+            {onUpdateArea && (
+              <Popover open={areaOpen} onOpenChange={setAreaOpen}>
+                <PopoverTrigger className="ml-1 p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors" title="Reassign area">
+                  <Edit2 className="size-3" />
+                </PopoverTrigger>
+                <PopoverContent className="w-56 p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search areas…" value={areaSearch} onValueChange={setAreaSearch} />
+                    <CommandList>
+                      <CommandEmpty>No area found.</CommandEmpty>
+                      <CommandGroup>
+                        {filteredAreas.slice(0, 30).map(area => (
+                          <CommandItem
+                            key={area}
+                            value={area}
+                            onSelect={() => {
+                              onUpdateArea(voter._id, area)
+                              setAreaOpen(false)
+                              setAreaSearch("")
+                            }}
+                          >
+                            {area}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground font-medium min-w-[40px]">Age:</span>
-            <span className="text-foreground">{voter.age} yrs</span>
+            <span className="text-foreground tabular-nums">{voter.age} yrs</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground font-medium min-w-[40px]">Gender:</span>
@@ -326,7 +472,7 @@ const VoterCard = memo(({ voter, onUpdateStatus }: { voter: Voter; onUpdateStatu
           {voter.phoneNumber && (
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium min-w-[40px]">Phone:</span>
-              <span className="text-foreground font-mono text-xs">{voter.phoneNumber}</span>
+              <span className="text-foreground font-mono text-xs tabular-nums">{voter.phoneNumber}</span>
             </div>
           )}
           {voter.relativeName && (
@@ -338,346 +484,355 @@ const VoterCard = memo(({ voter, onUpdateStatus }: { voter: Voter; onUpdateStatu
           {voter.distance !== undefined && (
             <div className="col-span-2 flex items-center gap-2 text-xs">
               <span className="text-muted-foreground font-medium">Distance:</span>
-              <span className="text-muted-foreground">{voter.distance.toFixed(2)} km</span>
+              <span className="text-muted-foreground tabular-nums">{voter.distance.toFixed(2)} km</span>
             </div>
           )}
         </div>
-      </CardContent>
-      <CardFooter className="flex flex-wrap gap-2 pt-0 pb-5 px-5">
-        {voter.status !== "done" && (
-          <Button
-            size="sm"
-            className="flex-1 h-9"
-            onClick={() => onUpdateStatus?.(voter._id, "done")}
-          >
-            <CheckCircle2 className="mr-1.5 size-4" />
-            Mark Done
-          </Button>
-        )}
-        {voter.status !== "pending" && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-9"
-            onClick={() => onUpdateStatus?.(voter._id, "pending")}
-          >
-            <RotateCcw className="mr-1.5 size-4" />
-            Pending
-          </Button>
-        )}
-        {voter.status !== "revisit" && (
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-9"
-            onClick={() => onUpdateStatus?.(voter._id, "revisit")}
-          >
-            <RotateCcw className="mr-1.5 size-4" />
-            Revisit
-          </Button>
-        )}
-        <Button
-          variant={voter.visited ? "default" : "outline"}
-          size="sm"
-          className="h-9"
-          onClick={() => onUpdateStatus?.(voter._id, voter.status)}
-        >
-          {voter.visited ? "Unvisit" : "Visit"}
-        </Button>
-        {voter.phoneNumber && (
-          <a href={`tel:${voter.phoneNumber}`}>
-            <Button variant="outline" size="sm" className="h-9">
-              <Phone className="mr-1.5 size-4" />
-              Call
+
+        {/* Apply suggestion */}
+        {voter.areaClusterSuggested && voter.areaClusterSuggested !== voter.areaCluster && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-sm">
+            <AlertTriangle className="size-3.5 text-amber-500 shrink-0" />
+            <span className="text-muted-foreground">Suggested: <strong className="text-foreground">{voter.areaClusterSuggested}</strong></span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-auto h-7 text-xs px-2"
+              onClick={() => onUpdateArea?.(voter._id, voter.areaClusterSuggested!)}
+            >
+              Apply
             </Button>
-          </a>
+          </div>
         )}
-        <a
-          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-            voter.displayAddress
-          )}`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Button variant="outline" size="sm" className="h-9">
-            <Navigation className="mr-1.5 size-4" />
-            Map
+      </CardContent>
+
+      <CardFooter className="flex flex-col gap-2 pt-0 pb-4 px-4">
+        <div className="flex w-full gap-2">
+          {voter.status !== "done" ? (
+            <Button size="sm" className="flex-1 h-10" onClick={() => onUpdateStatus?.(voter._id, "done")}>
+              <CheckCircle2 className="mr-1.5 size-4" />Mark Done
+            </Button>
+          ) : (
+            <div className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-primary/10 px-3 h-10 text-sm font-medium text-primary">
+              <CheckCircle2 className="size-4" />Done
+            </div>
+          )}
+          {voter.phoneNumber && (
+            <a href={`tel:${voter.phoneNumber}`}>
+              <Button variant="outline" size="icon" className="size-10 shrink-0"><Phone className="size-4" /></Button>
+            </a>
+          )}
+          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(voter.displayAddress)}`} target="_blank" rel="noopener noreferrer">
+            <Button variant="outline" size="icon" className="size-10 shrink-0"><Navigation className="size-4" /></Button>
+          </a>
+        </div>
+        <div className="flex w-full gap-1.5">
+          {voter.status !== "pending" && (
+            <Button variant="outline" size="sm" className="flex-1 h-9 text-xs px-2" onClick={() => onUpdateStatus?.(voter._id, "pending")}>Pending</Button>
+          )}
+          {voter.status !== "revisit" && (
+            <Button variant="secondary" size="sm" className="flex-1 h-9 text-xs px-2" onClick={() => onUpdateStatus?.(voter._id, "revisit")}>Revisit</Button>
+          )}
+          <Button
+            variant={voter.visited ? "default" : "outline"}
+            size="sm"
+            className="flex-1 h-9 text-xs px-2"
+            onClick={() => onUpdateStatus?.(voter._id, voter.status)}
+          >
+            {voter.visited ? "Unvisit" : "Visit"}
           </Button>
-        </a>
+        </div>
       </CardFooter>
     </Card>
   )
 })
+VoterCard.displayName = "VoterCard"
+
+// ── AreaPanel ──────────────────────────────────────────────────────────────────
+
+function AreaPanel({ clusters, selectedAreas, onToggle, onSelectAll, onClearAll }: {
+  clusters: ClusterSummary[]
+  selectedAreas: Set<string>
+  onToggle: (area: string) => void
+  onSelectAll: () => void
+  onClearAll: () => void
+}) {
+  const [search, setSearch] = useState("")
+  const filtered = clusters.filter(c => c.name.toLowerCase().includes(search.toLowerCase()))
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <Label className="font-semibold">Areas</Label>
+        <div className="flex gap-1">
+          <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={onSelectAll}>All</Button>
+          <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={onClearAll}>Clear</Button>
+        </div>
+      </div>
+      <div className="relative">
+        <Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
+        <Input
+          placeholder="Search areas…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="pl-8 h-8 text-sm"
+        />
+      </div>
+      <ScrollArea className="h-56">
+        <div className="space-y-0.5 pr-1">
+          {filtered.map(cluster => {
+            const pct = cluster.total > 0 ? Math.round((cluster.done / cluster.total) * 100) : 0
+            return (
+              <label
+                key={cluster.name}
+                className="flex items-center gap-2.5 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
+              >
+                <Checkbox
+                  checked={selectedAreas.has(cluster.name)}
+                  onCheckedChange={() => onToggle(cluster.name)}
+                  className="shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm leading-tight truncate">{cluster.name}</p>
+                </div>
+                <div className="text-xs text-muted-foreground tabular-nums shrink-0">
+                  {cluster.done}/{cluster.total}
+                </div>
+              </label>
+            )
+          })}
+          {filtered.length === 0 && (
+            <p className="text-sm text-muted-foreground text-center py-4">No areas found</p>
+          )}
+        </div>
+      </ScrollArea>
+    </div>
+  )
+}
+
+// ── ThemeToggle ────────────────────────────────────────────────────────────────
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
 
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  if (!mounted) {
-    return (
-      <Button variant="ghost" size="icon" className="size-8">
-        <Sun className="size-4" />
-      </Button>
-    )
-  }
+  if (!mounted) return <Button variant="ghost" size="icon" className="size-8"><Sun className="size-4" /></Button>
 
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="size-8"
-      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-    >
-      {theme === "dark" ? (
-        <Sun className="size-4" />
-      ) : (
-        <Moon className="size-4" />
-      )}
+    <Button variant="ghost" size="icon" className="size-8" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+      {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
     </Button>
   )
 }
+
+// ── FieldDashboard ─────────────────────────────────────────────────────────────
 
 export function FieldDashboard({ user }: FieldDashboardProps) {
   const router = useRouter()
   const [voters, setVoters] = useState<Voter[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null)
-  
-  // Pending filters (what user is typing)
-  const [pendingFilters, setPendingFilters] = useState<Filters>({
-    status: "all",
-    visited: "all",
-    name: "",
-    phone: "",
-    address: "",
-    gender: "",
-    minAge: "",
-    maxAge: "",
-    areaCluster: "",
-    phoneOnly: false,
-    includeVague: false,
-    includeMissing: false,
-  })
-
-  // Applied filters (what was last submitted)
-  const [appliedFilters, setAppliedFilters] = useState<Filters>(pendingFilters)
+  const [filters, setFilters] = useState<Filters>(INITIAL_FILTERS)
+  const [selectedAreas, setSelectedAreas] = useState<Set<string>>(new Set())
+  const [clusterSummary, setClusterSummary] = useState<ClusterSummary[]>([])
   const [activeTab, setActiveTab] = useState("list")
-  const [isApplying, setIsApplying] = useState(false)
-  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false)
+  const [isExportOpen, setIsExportOpen] = useState(false)
+  const [statsCollapsed, setStatsCollapsed] = useState(false)
+  const [detailView, setDetailView] = useState(false)
 
-  // Get user location
+  // Location
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setLocation({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          })
-        },
-        () => {
-          console.log("Location access denied or unavailable")
-        }
+        pos => setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => {}
       )
     }
   }, [])
 
-  // Fetch voters from API
+  // Fetch cluster summary (for area panel) once on mount
+  useEffect(() => {
+    fetch("/api/clusters/summary")
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.clusters) setClusterSummary(data.clusters) })
+      .catch(() => {})
+  }, [])
+
+  // Load all voters — only location triggers refetch (for distance computation)
   const fetchVoters = useCallback(async () => {
     setIsLoading(true)
     try {
       const params = new URLSearchParams()
-      if (appliedFilters.status && appliedFilters.status !== "all") params.set("status", appliedFilters.status)
-      if (appliedFilters.visited !== "all") params.set("visited", appliedFilters.visited)
-      if (appliedFilters.name) params.set("name", appliedFilters.name)
-      if (appliedFilters.phone) params.set("phone", appliedFilters.phone)
-      if (appliedFilters.address) params.set("address", appliedFilters.address)
-      if (appliedFilters.gender) params.set("gender", appliedFilters.gender)
-      if (appliedFilters.minAge) params.set("minAge", appliedFilters.minAge)
-      if (appliedFilters.maxAge) params.set("maxAge", appliedFilters.maxAge)
-      if (appliedFilters.areaCluster) params.set("areaCluster", appliedFilters.areaCluster)
-      if (appliedFilters.phoneOnly) params.set("phoneOnly", "true")
-      if (appliedFilters.includeVague) params.set("includeVague", "true")
-      if (appliedFilters.includeMissing) params.set("includeMissing", "true")
+      // No status/filter params: load everything, filter client-side
+      params.set("includeVague", "true")
+      params.set("includeMissing", "true")
+      params.set("limit", "2000")
       if (location) {
         params.set("lat", location.lat.toString())
         params.set("lng", location.lng.toString())
-        params.set("radius", "2000")
+        // No radius — just compute distance, don't restrict
       }
-
-      const response = await fetch(`/api/voters/nearby?${params.toString()}`)
-      if (!response.ok) throw new Error("Failed to fetch")
-      const data = await response.json()
-      setVoters(data.items || [])
-    } catch (error) {
-      console.error("Error fetching voters:", error)
+      const res = await fetch(`/api/voters/nearby?${params.toString()}`)
+      if (!res.ok) throw new Error("Failed to fetch")
+      const data = await res.json()
+      setVoters(data.items ?? [])
+    } catch {
       toast.error("Failed to load voters")
     } finally {
       setIsLoading(false)
-      setIsApplying(false)
     }
-  }, [appliedFilters, location])
+  }, [location])
 
-  // Initial fetch on mount
-  useEffect(() => {
-    fetchVoters()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  useEffect(() => { fetchVoters() }, [fetchVoters])
 
-  async function handleApplyFilters() {
-    setIsApplying(true)
-    setAppliedFilters(pendingFilters)
-    // fetchVoters will be called by the useEffect when appliedFilters changes
-  }
-
-  // Refetch when appliedFilters change
-  useEffect(() => {
-    fetchVoters()
-  }, [appliedFilters, fetchVoters])
-
+  // Update status
   async function handleUpdateStatus(voterId: string, status: VoterStatus) {
     try {
-      const response = await fetch(`/api/voters/${voterId}/status`, {
+      const res = await fetch(`/api/voters/${voterId}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
       })
-
-      if (!response.ok) throw new Error("Failed to update")
-      
+      if (!res.ok) throw new Error("Failed")
       toast.success("Status updated")
       fetchVoters()
-    } catch (error) {
-      console.error("Error updating status:", error)
+    } catch {
       toast.error("Failed to update status")
     }
   }
 
-  const areaClusters = useMemo(() => {
-    const clusters = new Set<string>()
-    voters.forEach((voter: Voter) => clusters.add(voter.areaCluster))
-    return Array.from(clusters).sort()
-  }, [voters])
+  // Update area (Plan 04)
+  async function handleUpdateArea(voterId: string, areaCluster: string) {
+    try {
+      const res = await fetch(`/api/voters/${voterId}/area`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ areaCluster }),
+      })
+      if (!res.ok) throw new Error("Failed")
+      toast.success(`Area reassigned to "${areaCluster}"`)
+      fetchVoters()
+    } catch {
+      toast.error("Failed to update area")
+    }
+  }
 
+  // Area names for reassign dropdown — derive from loaded voters + cluster summary
+  const areaNames = useMemo(() => {
+    const fromSummary = clusterSummary.map(c => c.name)
+    const fromVoters = Array.from(new Set(voters.map(v => v.areaCluster)))
+    return Array.from(new Set([...fromSummary, ...fromVoters])).sort()
+  }, [clusterSummary, voters])
+
+  // Client-side filter
   const filteredVoters = useMemo(() => {
-    return voters.filter((voter: Voter) => {
-      if (appliedFilters.status !== "all" && voter.status !== appliedFilters.status) return false
-      if (appliedFilters.visited === "visited" && !voter.visited) return false
-      if (appliedFilters.visited === "unvisited" && voter.visited) return false
-      if (appliedFilters.name && !voter.name.toLowerCase().includes(appliedFilters.name.toLowerCase())) return false
-      if (appliedFilters.phone && !voter.phoneNumber?.includes(appliedFilters.phone)) return false
-      if (appliedFilters.address && !voter.displayAddress.toLowerCase().includes(appliedFilters.address.toLowerCase())) return false
-      if (appliedFilters.gender && voter.gender.toLowerCase() !== appliedFilters.gender.toLowerCase()) return false
-      if (appliedFilters.minAge && parseInt(voter.age) < parseInt(appliedFilters.minAge)) return false
-      if (appliedFilters.maxAge && parseInt(voter.age) > parseInt(appliedFilters.maxAge)) return false
-      if (appliedFilters.areaCluster && voter.areaCluster !== appliedFilters.areaCluster) return false
-      if (appliedFilters.phoneOnly && !voter.phoneNumber) return false
+    return voters.filter(voter => {
+      // Area filter
+      if (selectedAreas.size > 0 && !selectedAreas.has(voter.areaCluster)) return false
+      // Status
+      if (filters.status !== "all" && voter.status !== filters.status) return false
+      // Visited
+      if (filters.visited === "visited" && !voter.visited) return false
+      if (filters.visited === "unvisited" && voter.visited) return false
+      // Address quality toggles
+      if (!filters.includeVague && voter.addressQuality === "vague") return false
+      if (!filters.includeMissing && voter.addressQuality === "missing") return false
+      // Text filters
+      if (filters.name && !voter.name.toLowerCase().includes(filters.name.toLowerCase())) return false
+      if (filters.phone && !voter.phoneNumber?.includes(filters.phone)) return false
+      if (filters.address && !voter.displayAddress.toLowerCase().includes(filters.address.toLowerCase())) return false
+      // Gender
+      if (filters.gender && voter.gender.toLowerCase() !== filters.gender.toLowerCase()) return false
+      // Age
+      if (filters.minAge && parseInt(voter.age) < parseInt(filters.minAge)) return false
+      if (filters.maxAge && parseInt(voter.age) > parseInt(filters.maxAge)) return false
+      // Phone only
+      if (filters.phoneOnly && !voter.phoneNumber) return false
+      // Needs review (Plan 04)
+      if (filters.needsReview && !voter.areaClusterNeedsReview && !voter.areaCluster.startsWith("Uncertain:")) return false
       return true
     })
-  }, [voters, appliedFilters])
+  }, [voters, filters, selectedAreas])
 
-  const stats = useMemo(() => {
-    const total = voters.length
-    const pending = voters.filter((v: Voter) => v.status === "pending").length
-    const done = voters.filter((v: Voter) => v.status === "done").length
-    const revisit = voters.filter((v: Voter) => v.status === "revisit").length
-    const other = voters.filter((v: Voter) => !["pending", "done", "revisit"].includes(v.status)).length
-    return { total, pending, done, revisit, other }
-  }, [voters])
-
-  const clearFilters = () => {
-    const cleared = {
-      status: "all" as const,
-      visited: "all" as const,
-      name: "",
-      phone: "",
-      address: "",
-      gender: "",
-      minAge: "",
-      maxAge: "",
-      areaCluster: "",
-      phoneOnly: false,
-      includeVague: false,
-      includeMissing: false,
-    }
-    setPendingFilters(cleared)
-    setAppliedFilters(cleared)
-  }
+  // Stats from all loaded voters (not filtered — overall picture)
+  const stats = useMemo(() => ({
+    total: voters.length,
+    pending: voters.filter(v => v.status === "pending").length,
+    done: voters.filter(v => v.status === "done").length,
+    revisit: voters.filter(v => v.status === "revisit").length,
+    other: voters.filter(v => !["pending", "done", "revisit"].includes(v.status)).length,
+  }), [voters])
 
   const hasActiveFilters =
-    appliedFilters.status !== "all" ||
-    appliedFilters.visited !== "all" ||
-    appliedFilters.name ||
-    appliedFilters.phone ||
-    appliedFilters.address ||
-    appliedFilters.gender ||
-    appliedFilters.minAge ||
-    appliedFilters.maxAge ||
-    appliedFilters.areaCluster ||
-    appliedFilters.phoneOnly ||
-    appliedFilters.includeVague ||
-    appliedFilters.includeMissing
+    filters.status !== "all" || filters.visited !== "all" || filters.name || filters.phone ||
+    filters.address || filters.gender || filters.minAge || filters.maxAge || filters.phoneOnly ||
+    filters.includeVague || filters.includeMissing || filters.needsReview || selectedAreas.size > 0
 
-  const hasPendingChanges =
-    pendingFilters.status !== appliedFilters.status ||
-    pendingFilters.visited !== appliedFilters.visited ||
-    pendingFilters.name !== appliedFilters.name ||
-    pendingFilters.phone !== appliedFilters.phone ||
-    pendingFilters.address !== appliedFilters.address ||
-    pendingFilters.gender !== appliedFilters.gender ||
-    pendingFilters.minAge !== appliedFilters.minAge ||
-    pendingFilters.maxAge !== appliedFilters.maxAge ||
-    pendingFilters.areaCluster !== appliedFilters.areaCluster ||
-    pendingFilters.phoneOnly !== appliedFilters.phoneOnly ||
-    pendingFilters.includeVague !== appliedFilters.includeVague ||
-    pendingFilters.includeMissing !== appliedFilters.includeMissing
+  const updateFilter = <K extends keyof Filters>(key: K, value: Filters[K]) =>
+    setFilters(prev => ({ ...prev, [key]: value }))
 
-  const updatePendingFilter = <K extends keyof Filters>(key: K, value: Filters[K]) => {
-    setPendingFilters((prev) => ({ ...prev, [key]: value }))
+  const clearFilters = () => {
+    setFilters(INITIAL_FILTERS)
+    setSelectedAreas(new Set())
   }
 
-  const FilterContent = ({ showApply = false }: { showApply?: boolean }) => (
+  const toggleArea = (area: string) =>
+    setSelectedAreas(prev => { const s = new Set(prev); s.has(area) ? s.delete(area) : s.add(area); return s })
+
+  const selectAllAreas = () => setSelectedAreas(new Set(clusterSummary.map(c => c.name)))
+  const clearAllAreas = () => setSelectedAreas(new Set())
+
+  // Filter labels for PDF export
+  const filterLabels = useMemo(() => {
+    const labels: string[] = []
+    if (selectedAreas.size > 0) labels.push(`Areas: ${Array.from(selectedAreas).join(", ")}`)
+    if (filters.status !== "all") labels.push(`Status: ${filters.status}`)
+    if (filters.name) labels.push(`Name: ${filters.name}`)
+    if (filters.gender) labels.push(`Gender: ${filters.gender}`)
+    return labels
+  }, [selectedAreas, filters])
+
+  // Show grouped list when 2+ areas selected
+  const showGrouped = selectedAreas.size >= 2
+
+  // ── Filter panel content (shared between desktop sidebar and mobile sheet) ──
+  const FilterPanel = () => (
     <div className="space-y-4">
+      {/* Area checklist */}
+      {clusterSummary.length > 0 && (
+        <>
+          <AreaPanel
+            clusters={clusterSummary}
+            selectedAreas={selectedAreas}
+            onToggle={toggleArea}
+            onSelectAll={selectAllAreas}
+            onClearAll={clearAllAreas}
+          />
+          <Separator />
+        </>
+      )}
+
+      {/* Text search filters */}
       <div className="space-y-2">
-        <Label>Search by Name</Label>
+        <Label>Name</Label>
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-          <Input
-            placeholder="Enter voter name..."
-            value={pendingFilters.name}
-            onChange={(e) => updatePendingFilter("name", e.target.value)}
-            className="pl-9"
-          />
+          <Input placeholder="Enter voter name…" value={filters.name} onChange={e => updateFilter("name", e.target.value)} className="pl-9" />
         </div>
       </div>
-
       <div className="space-y-2">
-        <Label>Phone Number</Label>
+        <Label>Phone</Label>
         <div className="relative">
           <Phone className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-          <Input
-            placeholder="Search by phone..."
-            value={pendingFilters.phone}
-            onChange={(e) => updatePendingFilter("phone", e.target.value)}
-            className="pl-9"
-          />
+          <Input placeholder="Search by phone…" value={filters.phone} onChange={e => updateFilter("phone", e.target.value)} className="pl-9" />
         </div>
       </div>
-
       <div className="space-y-2">
         <Label>Address</Label>
         <div className="relative">
           <MapPinned className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-          <Input
-            placeholder="Search by address..."
-            value={pendingFilters.address}
-            onChange={(e) => updatePendingFilter("address", e.target.value)}
-            className="pl-9"
-          />
+          <Input placeholder="Search by address…" value={filters.address} onChange={e => updateFilter("address", e.target.value)} className="pl-9" />
         </div>
       </div>
 
@@ -686,13 +841,8 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label>Status</Label>
-          <Select
-            value={pendingFilters.status}
-            onValueChange={(value) => updatePendingFilter("status", value as Filters["status"])}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="All Status" />
-            </SelectTrigger>
+          <Select value={filters.status} onValueChange={v => updateFilter("status", v as Filters["status"])}>
+            <SelectTrigger><SelectValue placeholder="All Status" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Status</SelectItem>
               <SelectItem value="pending">Pending</SelectItem>
@@ -703,16 +853,10 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
             </SelectContent>
           </Select>
         </div>
-
         <div className="space-y-2">
           <Label>Visited</Label>
-          <Select
-            value={pendingFilters.visited}
-            onValueChange={(value) => updatePendingFilter("visited", value as VisitedFilter)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="All" />
-            </SelectTrigger>
+          <Select value={filters.visited} onValueChange={v => updateFilter("visited", v as VisitedFilter)}>
+            <SelectTrigger><SelectValue placeholder="All" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All</SelectItem>
               <SelectItem value="visited">Visited</SelectItem>
@@ -722,127 +866,52 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>Gender</Label>
-          <Select
-            value={pendingFilters.gender}
-            onValueChange={(value) => updatePendingFilter("gender", value || "")}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="All Genders" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">All Genders</SelectItem>
-              <SelectItem value="male">Male</SelectItem>
-              <SelectItem value="female">Female</SelectItem>
-              <SelectItem value="other">Other</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
-          <Label>Area Cluster</Label>
-          <Popover>
-            <PopoverTrigger className="flex w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm">
-              {pendingFilters.areaCluster || "All Areas"}
-              <ChevronDown className="size-4 opacity-50" />
-            </PopoverTrigger>
-            <PopoverContent className="w-[200px] p-0" align="start">
-              <Command>
-                <CommandInput placeholder="Search area..." />
-                <CommandList>
-                  <CommandEmpty>No area found.</CommandEmpty>
-                  <CommandGroup>
-                    <CommandItem
-                      value="all"
-                      onSelect={() => updatePendingFilter("areaCluster", "")}
-                    >
-                      All Areas
-                    </CommandItem>
-                    {areaClusters.map((cluster) => (
-                      <CommandItem
-                        key={cluster}
-                        value={cluster}
-                        onSelect={() => updatePendingFilter("areaCluster", cluster)}
-                      >
-                        {cluster}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
-        </div>
+      <div className="space-y-2">
+        <Label>Gender</Label>
+        <Select value={filters.gender || ""} onValueChange={v => updateFilter("gender", v ?? "")}>
+          <SelectTrigger><SelectValue placeholder="All Genders" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All Genders</SelectItem>
+            <SelectItem value="male">Male</SelectItem>
+            <SelectItem value="female">Female</SelectItem>
+            <SelectItem value="other">Other</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label>Min Age</Label>
-          <Input
-            type="number"
-            placeholder="Min age"
-            value={pendingFilters.minAge}
-            onChange={(e) => updatePendingFilter("minAge", e.target.value)}
-          />
+          <Input type="number" placeholder="Min" value={filters.minAge} onChange={e => updateFilter("minAge", e.target.value)} />
         </div>
         <div className="space-y-2">
           <Label>Max Age</Label>
-          <Input
-            type="number"
-            placeholder="Max age"
-            value={pendingFilters.maxAge}
-            onChange={(e) => updatePendingFilter("maxAge", e.target.value)}
-          />
+          <Input type="number" placeholder="Max" value={filters.maxAge} onChange={e => updateFilter("maxAge", e.target.value)} />
         </div>
       </div>
 
       <Separator />
 
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <Label htmlFor="phone-only">Phone available only</Label>
-          <Switch
-            id="phone-only"
-            checked={pendingFilters.phoneOnly}
-            onCheckedChange={(checked) => updatePendingFilter("phoneOnly", checked)}
-          />
-        </div>
-        <div className="flex items-center justify-between">
-          <Label htmlFor="include-vague">Include vague addresses</Label>
-          <Switch
-            id="include-vague"
-            checked={pendingFilters.includeVague}
-            onCheckedChange={(checked) => updatePendingFilter("includeVague", checked)}
-          />
-        </div>
-        <div className="flex items-center justify-between">
-          <Label htmlFor="include-missing">Include missing addresses</Label>
-          <Switch
-            id="include-missing"
-            checked={pendingFilters.includeMissing}
-            onCheckedChange={(checked) => updatePendingFilter("includeMissing", checked)}
-          />
-        </div>
+        {[
+          { id: "phone-only", label: "Phone available only", key: "phoneOnly" as const },
+          { id: "incl-vague", label: "Include vague addresses", key: "includeVague" as const },
+          { id: "incl-missing", label: "Include missing addresses", key: "includeMissing" as const },
+          { id: "needs-review", label: "Needs review only", key: "needsReview" as const },
+        ].map(opt => (
+          <div key={opt.id} className="flex items-center justify-between">
+            <Label htmlFor={opt.id}>{opt.label}</Label>
+            <Switch id={opt.id} checked={filters[opt.key]} onCheckedChange={v => updateFilter(opt.key, v)} />
+          </div>
+        ))}
       </div>
 
-      {showApply && (
+      {hasActiveFilters && (
         <>
           <Separator />
-          <Button 
-            className="w-full" 
-            onClick={handleApplyFilters}
-            disabled={!hasPendingChanges || isApplying}
-          >
-            {isApplying ? "Applying..." : hasPendingChanges ? "Apply Filters" : "Filters Applied"}
+          <Button variant="outline" className="w-full" onClick={clearFilters}>
+            <X className="mr-1 size-4" />Clear All Filters
           </Button>
-          {hasActiveFilters && (
-            <Button variant="outline" className="w-full" onClick={clearFilters}>
-              <X className="mr-1 size-4" />
-              Clear All
-            </Button>
-          )}
         </>
       )}
     </div>
@@ -854,10 +923,21 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="relative flex min-h-screen flex-col bg-background">
+      {/* Dark texture background */}
+      <div className="pointer-events-none fixed inset-0 -z-10 hidden dark:block" aria-hidden>
+        <div className="absolute inset-0 bg-[radial-gradient(680px_360px_at_50%_-8%,rgba(255,255,255,0.06),transparent_70%)]" />
+        <div className="bg-grid-texture absolute inset-0 opacity-50" />
+      </div>
+      {/* Light texture background */}
+      <div className="pointer-events-none fixed inset-0 -z-10 block dark:hidden" aria-hidden>
+        <div className="absolute inset-0 bg-[radial-gradient(680px_360px_at_50%_-8%,rgba(0,0,0,0.03),transparent_70%)]" />
+        <div className="bg-grid-texture-light absolute inset-0 opacity-60" />
+      </div>
+
       {/* Header */}
-      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
-        <div className="container flex h-14 items-center justify-between px-4">
+      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 glass-header">
+        <div className="container mx-auto flex h-14 items-center justify-between px-4">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
               <MapPin className="size-5 text-primary" />
@@ -877,12 +957,11 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
               <User className="size-4" />
             </div>
             {user.role === "admin" && (
-            <a href="/upload">
-              <Button variant="outline" size="sm">
-                <Upload className="mr-1 size-4" />
-                Upload
-              </Button>
-            </a>
+              <a href="/upload">
+                <Button variant="outline" size="sm">
+                  <Upload className="mr-1 size-4" />Upload
+                </Button>
+              </a>
             )}
             <Button variant="ghost" size="sm" onClick={handleLogout}>
               <LogOut className="size-4" />
@@ -892,176 +971,152 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
       </header>
 
       <main className="flex-1">
-        {/* Stats Cards */}
-        <div className="container px-4 py-6">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-            <StatCard
-              title="Total"
-              count={stats.total}
-              icon={<User className="size-5" />}
-            />
-            <StatCard
-              title="Pending"
-              count={stats.pending}
-              icon={<Clock className="size-5" />}
-              variant="secondary"
-            />
-            <StatCard
-              title="Done"
-              count={stats.done}
-              icon={<CheckCircle2 className="size-5" />}
-              variant="default"
-            />
-            <StatCard
-              title="Revisit"
-              count={stats.revisit}
-              icon={<RotateCcw className="size-5" />}
-              variant="destructive"
-            />
-            <StatCard
-              title="Other"
-              count={stats.other}
-              icon={<AlertCircle className="size-5" />}
-              variant="outline"
-            />
-          </div>
+        {/* Stats */}
+        <div className="container mx-auto px-4 pt-4 pb-2">
+          <button
+            onClick={() => setStatsCollapsed(v => !v)}
+            className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
+          >
+            {statsCollapsed ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
+            <span className="font-medium">Overview</span>
+            {statsCollapsed && (
+              <span className="ml-1 text-foreground font-medium">
+                {stats.total} total · {stats.pending} pending · {stats.done} done · {stats.revisit} revisit
+              </span>
+            )}
+          </button>
+          {!statsCollapsed && (
+            <div className="scrollbar-hide flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 sm:grid sm:grid-cols-3 lg:grid-cols-5">
+              <StatCard title="Total" count={stats.total} icon={<User className="size-5" />} />
+              <StatCard title="Pending" count={stats.pending} icon={<Clock className="size-5" />} variant="secondary" />
+              <StatCard title="Done" count={stats.done} icon={<CheckCircle2 className="size-5" />} variant="default" />
+              <StatCard title="Revisit" count={stats.revisit} icon={<RotateCcw className="size-5" />} variant="destructive" />
+              <StatCard title="Other" count={stats.other} icon={<AlertCircle className="size-5" />} variant="outline" />
+            </div>
+          )}
         </div>
 
-        {/* Main Content */}
-        <div className="container px-4 pb-10">
+        {/* Main content */}
+        <div className="container mx-auto px-4 pb-10">
           <div className="flex gap-8">
-            {/* Desktop Sidebar Filters */}
+            {/* Desktop sidebar */}
             <div className="hidden w-72 shrink-0 lg:block">
-              <Card className="sticky top-20">
+              <Card className="sticky top-20 glass-surface">
                 <CardHeader className="pb-4">
                   <CardTitle className="text-lg flex items-center gap-2">
-                    <Filter className="size-5" />
-                    Filters
+                    <Filter className="size-5" />Filters
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  <FilterContent showApply={true} />
+                  <ScrollArea className="h-[calc(100vh-14rem)]">
+                    <div className="pr-2">
+                      <FilterPanel />
+                    </div>
+                  </ScrollArea>
                 </CardContent>
               </Card>
             </div>
 
-            {/* Main Content Area */}
-            <div className="flex-1">
+            {/* Right content */}
+            <div className="flex-1 min-w-0">
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <div className="mb-4 flex items-center justify-between">
                   <TabsList>
                     <TabsTrigger value="list" className="gap-1">
-                      <List className="size-4" />
-                      List
-                    </TabsTrigger>
-                    <TabsTrigger value="clusters" className="gap-1">
-                      <Layers className="size-4" />
-                      Clusters
+                      <List className="size-4" />List
                     </TabsTrigger>
                     <TabsTrigger value="map" className="gap-1">
-                      <MapPin className="size-4" />
-                      Map
+                      <MapPin className="size-4" />Map
                     </TabsTrigger>
                   </TabsList>
 
-                  {/* Mobile Filter Button */}
+                  {/* Mobile filter button */}
                   <Sheet>
                     <SheetTrigger className="lg:hidden inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground h-8 px-3">
-                      <Filter className="size-4" />
-                      Filters
-                      {hasActiveFilters && (
-                        <Badge variant="secondary" className="ml-1 px-1 py-0 text-[10px]">
-                          Active
-                        </Badge>
-                      )}
+                      <Filter className="size-4" />Filters
+                      {hasActiveFilters && <Badge variant="secondary" className="ml-1 px-1 py-0 text-[10px]">Active</Badge>}
                     </SheetTrigger>
                     <SheetContent side="left" className="w-full sm:max-w-md">
                       <SheetHeader>
                         <SheetTitle>Filters</SheetTitle>
-                        <SheetDescription>
-                          Refine your voter search
-                        </SheetDescription>
+                        <SheetDescription>Refine your voter search</SheetDescription>
                       </SheetHeader>
-                      <ScrollArea className="h-[calc(100vh-12rem)] pr-4">
-                        <div className="py-4">
-                          <FilterContent showApply={true} />
-                        </div>
+                      <ScrollArea className="h-[calc(100vh-10rem)] mt-4 pr-4">
+                        <FilterPanel />
                       </ScrollArea>
                     </SheetContent>
                   </Sheet>
                 </div>
 
                 <TabsContent value="list" className="mt-0">
+                  {/* Summary bar */}
                   <div className="mb-4 flex items-center justify-between">
                     <p className="text-sm text-muted-foreground">
-                      {isLoading ? "Loading..." : `${filteredVoters.length} voters found`}
+                      {isLoading ? "Loading…" : (
+                        selectedAreas.size > 0
+                          ? `${selectedAreas.size} ${selectedAreas.size === 1 ? "area" : "areas"} · ${filteredVoters.length} voters`
+                          : `${filteredVoters.length} voters`
+                      )}
                     </p>
                     <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setDetailView(v => !v)}
+                        className="gap-1 h-8 text-xs px-2.5"
+                        title={detailView ? "Switch to compact view" : "Switch to detailed view"}
+                      >
+                        {detailView ? <List className="size-3.5" /> : <MoreHorizontal className="size-3.5" />}
+                        {detailView ? "Compact" : "Detailed"}
+                      </Button>
                       {!isLoading && filteredVoters.length > 0 && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setIsExportDialogOpen(true)}
-                          className="gap-1"
-                        >
-                          <Download className="size-4" />
-                          Export
+                        <Button variant="outline" size="sm" onClick={() => setIsExportOpen(true)} className="gap-1">
+                          <Download className="size-4" />Export
                         </Button>
                       )}
                       {hasActiveFilters && (
                         <Button variant="ghost" size="sm" onClick={clearFilters}>
-                          <X className="mr-1 size-4" />
-                          Clear
+                          <X className="mr-1 size-4" />Clear
                         </Button>
                       )}
                     </div>
                   </div>
 
                   {isLoading ? (
-                    <div className="space-y-4">
-                      {Array.from({ length: 5 }).map((_, i) => (
-                        <VoterCardSkeleton key={i} />
-                      ))}
+                    <div className={detailView ? "space-y-4" : "space-y-2"}>
+                      {Array.from({ length: 5 }).map((_, i) => detailView ? <VoterCardSkeleton key={i} /> : <VoterRowSkeleton key={i} />)}
                     </div>
                   ) : filteredVoters.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center">
                       <Search className="mb-4 size-12 text-muted-foreground" />
                       <h3 className="text-lg font-semibold">No voters found</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Try adjusting your filters or upload a CSV file
-                      </p>
+                      <p className="text-sm text-muted-foreground">Try adjusting your filters</p>
                       {hasActiveFilters && (
-                        <Button
-                          variant="outline"
-                          className="mt-4"
-                          onClick={clearFilters}
-                        >
-                          Clear Filters
-                        </Button>
+                        <Button variant="outline" className="mt-4" onClick={clearFilters}>Clear Filters</Button>
                       )}
                     </div>
+                  ) : showGrouped ? (
+                    <GroupedVoterList
+                      voters={filteredVoters}
+                      onUpdateStatus={handleUpdateStatus}
+                      onUpdateArea={handleUpdateArea}
+                      areaNames={areaNames}
+                      detailView={detailView}
+                    />
                   ) : (
                     <VirtualizedVoterList
                       voters={filteredVoters}
                       onUpdateStatus={handleUpdateStatus}
+                      onUpdateArea={handleUpdateArea}
+                      areaNames={areaNames}
+                      detailView={detailView}
                     />
                   )}
                 </TabsContent>
 
-                <TabsContent value="clusters" className="mt-0">
-                  <ClusterView 
-                    voters={filteredVoters}
-                    onUpdateStatus={handleUpdateStatus}
-                    isLoading={isLoading}
-                  />
-                </TabsContent>
-
                 <TabsContent value="map" className="mt-0">
                   <Card className="h-[calc(100vh-16rem)]">
-                    <VoterMap 
-                      voters={filteredVoters} 
-                      userLocation={location}
-                    />
+                    <VoterMap voters={filteredVoters} userLocation={location} />
                   </Card>
                 </TabsContent>
               </Tabs>
@@ -1071,354 +1126,11 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
       </main>
 
       <ExportDialog
-        open={isExportDialogOpen}
-        onOpenChange={setIsExportDialogOpen}
+        open={isExportOpen}
+        onOpenChange={setIsExportOpen}
         voters={filteredVoters}
-        filters={appliedFilters}
+        filterLabels={filterLabels}
       />
     </div>
   )
-}
-
-// Cluster View Component
-interface ClusterViewProps {
-  voters: Voter[]
-  onUpdateStatus: (voterId: string, status: VoterStatus) => void
-  isLoading: boolean
-}
-
-function ClusterView({ voters, onUpdateStatus, isLoading }: ClusterViewProps) {
-  const [sortBy, setSortBy] = useState<"name" | "count">("count")
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc")
-  const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set())
-
-  // Group voters by cluster
-  const clusters = useMemo(() => {
-    const groups = new Map<string, Voter[]>()
-    voters.forEach((voter) => {
-      const cluster = voter.areaCluster
-      if (!groups.has(cluster)) {
-        groups.set(cluster, [])
-      }
-      groups.get(cluster)!.push(voter)
-    })
-    
-    // Convert to array and sort
-    let sortedClusters = Array.from(groups.entries())
-    
-    sortedClusters.sort((a, b) => {
-      if (sortBy === "name") {
-        const comparison = a[0].localeCompare(b[0])
-        return sortDirection === "asc" ? comparison : -comparison
-      } else {
-        const comparison = a[1].length - b[1].length
-        return sortDirection === "asc" ? comparison : -comparison
-      }
-    })
-    
-    return sortedClusters
-  }, [voters, sortBy, sortDirection])
-
-  const toggleCluster = (clusterName: string) => {
-    setExpandedClusters((prev) => {
-      const next = new Set(prev)
-      if (next.has(clusterName)) {
-        next.delete(clusterName)
-      } else {
-        next.add(clusterName)
-      }
-      return next
-    })
-  }
-
-  const expandAll = () => {
-    setExpandedClusters(new Set(clusters.map(([name]) => name)))
-  }
-
-  const collapseAll = () => {
-    setExpandedClusters(new Set())
-  }
-
-  if (isLoading) {
-    return (
-      <div className="space-y-4">
-        {Array.from({ length: 3 }).map((_, i) => (
-          <Card key={i}>
-            <CardHeader className="pb-3">
-              <Skeleton className="h-6 w-48" />
-              <Skeleton className="h-4 w-32" />
-            </CardHeader>
-          </Card>
-        ))}
-      </div>
-    )
-  }
-
-  if (voters.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-12 text-center">
-        <Layers className="mb-4 size-12 text-muted-foreground" />
-        <h3 className="text-lg font-semibold">No voters found</h3>
-        <p className="text-sm text-muted-foreground">
-          Try adjusting your filters to see clusters
-        </p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="space-y-4">
-      {/* Controls */}
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-muted-foreground">
-          {clusters.length} clusters • {voters.length} voters
-        </p>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Sort by:</span>
-            <Select value={sortBy} onValueChange={(value) => setSortBy(value as typeof sortBy)}>
-              <SelectTrigger className="w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="count">Count</SelectItem>
-                <SelectItem value="name">Name</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setSortDirection(sortDirection === "asc" ? "desc" : "asc")}
-              className="h-8 w-8"
-            >
-              {sortDirection === "asc" ? "↑" : "↓"}
-            </Button>
-          </div>
-          <div className="flex gap-1">
-            <Button variant="ghost" size="sm" onClick={expandAll}>
-              Expand All
-            </Button>
-            <Button variant="ghost" size="sm" onClick={collapseAll}>
-              Collapse All
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      {/* Cluster List */}
-      <div className="space-y-3">
-        {clusters.map(([clusterName, clusterVoters]) => {
-          const isExpanded = expandedClusters.has(clusterName)
-          const pending = clusterVoters.filter((v) => v.status === "pending").length
-          const done = clusterVoters.filter((v) => v.status === "done").length
-          const revisit = clusterVoters.filter((v) => v.status === "revisit").length
-
-          const handleExportCSV = () => {
-            exportClusterToCSV(clusterName, clusterVoters)
-          }
-
-          const handleExportPDF = () => {
-            exportClusterToPDF(clusterName, clusterVoters)
-          }
-
-          return (
-            <Card key={clusterName} className="overflow-hidden">
-              <div className="w-full p-4 flex items-center justify-between hover:bg-muted/50 transition-colors">
-                <button
-                  onClick={() => toggleCluster(clusterName)}
-                  className="flex items-center gap-4 flex-1 text-left"
-                >
-                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10 text-primary font-semibold">
-                    {clusterVoters.length}
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-lg">{clusterName}</h3>
-                    <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Clock className="size-3" />
-                        {pending} pending
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <CheckCircle2 className="size-3" />
-                        {done} done
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <RotateCcw className="size-3" />
-                        {revisit} revisit
-                      </span>
-                    </div>
-                  </div>
-                </button>
-                <div className="flex items-center gap-2">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <MoreHorizontal className="size-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={handleExportCSV} className="gap-2">
-                        <FileSpreadsheet className="size-4" />
-                        Export CSV
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={handleExportPDF} className="gap-2">
-                        <FileText className="size-4" />
-                        Export PDF
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <button
-                    onClick={() => toggleCluster(clusterName)}
-                    className="p-1 hover:bg-muted rounded"
-                  >
-                    {isExpanded ? (
-                      <ChevronUp className="size-5 text-muted-foreground" />
-                    ) : (
-                      <ChevronDown className="size-5 text-muted-foreground" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {isExpanded && (
-                <div className="border-t bg-muted/30">
-                  <div className="p-4 space-y-3 max-h-[600px] overflow-y-auto">
-                    {clusterVoters.map((voter) => (
-                      <VoterCard
-                        key={voter._id}
-                        voter={voter}
-                        onUpdateStatus={onUpdateStatus}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </Card>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-// Export functions for single cluster
-function exportClusterToCSV(clusterName: string, voters: Voter[]) {
-  const headers = ["Name", "Phone", "Address", "Status", "Visited", "Age", "Gender"]
-  const rows = voters.map((voter) => [
-    voter.name,
-    voter.phoneNumber || "",
-    voter.displayAddress,
-    voter.status,
-    voter.visited ? "Yes" : "No",
-    voter.age,
-    voter.gender,
-  ])
-
-  const csvContent = [headers, ...rows]
-    .map((row) =>
-      row
-        .map((cell) => {
-          const stringCell = String(cell)
-          if (stringCell.includes(",") || stringCell.includes('"') || stringCell.includes("\n")) {
-            return `"${stringCell.replace(/"/g, '""')}"`
-          }
-          return stringCell
-        })
-        .join(",")
-    )
-    .join("\n")
-
-  const blob = new Blob(["\ufeff" + csvContent], { type: "text/csv;charset=utf-8;" })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement("a")
-  link.href = url
-  const safeClusterName = clusterName.replace(/[^a-zA-Z0-9]/g, "_")
-  link.download = `cluster_${safeClusterName}_${voters.length}_voters_${new Date().toISOString().split("T")[0]}.csv`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
-
-  toast.success(`Exported ${voters.length} voters from ${clusterName} to CSV`)
-}
-
-function exportClusterToPDF(clusterName: string, voters: Voter[]) {
-  import("jspdf").then(({ default: jsPDF }) => {
-    import("jspdf-autotable").then(({ default: autoTable }) => {
-      const doc = new jsPDF({
-        orientation: "portrait",
-        unit: "mm",
-        format: "a4",
-      })
-
-      // Header
-      doc.setFontSize(16)
-      doc.setFont("helvetica", "bold")
-      doc.text(`Cluster: ${clusterName}`, 14, 20)
-
-      doc.setFontSize(10)
-      doc.setFont("helvetica", "normal")
-      doc.text(`Total Voters: ${voters.length}`, 14, 28)
-      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 33)
-
-      // Table
-      const headers = [["Name", "Phone", "Address", "Status", "Age"]]
-      const body = voters.map((voter) => [
-        voter.name,
-        voter.phoneNumber || "-",
-        voter.displayAddress,
-        voter.status,
-        voter.age,
-      ])
-
-      autoTable(doc, {
-        head: headers,
-        body,
-        startY: 40,
-        theme: "grid", // Changed to 'grid' for hard borders
-        headStyles: {
-          fillColor: [41, 128, 185],
-          textColor: [0, 0, 0], // Black text
-          fontStyle: "bold",
-          fontSize: 9,
-          lineColor: [0, 0, 0], // Black borders
-          lineWidth: 0.5,
-        },
-        bodyStyles: {
-          fontSize: 8,
-          textColor: [0, 0, 0], // Black text
-          lineColor: [0, 0, 0], // Black borders
-          lineWidth: 0.5,
-        },
-        alternateRowStyles: {
-          fillColor: [245, 245, 245],
-          textColor: [0, 0, 0], // Black text
-        },
-        margin: { top: 10, right: 14, bottom: 10, left: 14 },
-        styles: {
-          overflow: "linebreak",
-          cellWidth: "auto",
-          textColor: [0, 0, 0], // Black text
-          lineColor: [0, 0, 0], // Black borders for all cells
-          lineWidth: 0.5,
-        },
-        didDrawPage: (data) => {
-          const pageCount = doc.getNumberOfPages()
-          const currentPage = data.pageNumber
-          doc.setFontSize(8)
-          doc.setFont("helvetica", "normal")
-          doc.text(
-            `Page ${currentPage} of ${pageCount}`,
-            doc.internal.pageSize.getWidth() - 30,
-            doc.internal.pageSize.getHeight() - 10
-          )
-        },
-      })
-
-      const safeClusterName = clusterName.replace(/[^a-zA-Z0-9]/g, "_")
-      doc.save(`cluster_${safeClusterName}_${voters.length}_voters_${new Date().toISOString().split("T")[0]}.pdf`)
-
-      toast.success(`Exported ${voters.length} voters from ${clusterName} to PDF`)
-    })
-  })
 }

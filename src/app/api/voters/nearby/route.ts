@@ -21,11 +21,11 @@ export const GET = requireAuth(async (request: NextRequest) => {
   try {
     const { searchParams } = new URL(request.url);
     
-    // Parse filters from query params
-    const statusParam = searchParams.get("status") || "pending";
-    const status = validStatuses.includes(statusParam as VoterStatus) 
-      ? statusParam as VoterStatus 
-      : "pending";
+    // Parse filters from query params — absent or "all" means no status filter
+    const statusParam = searchParams.get("status");
+    const status = statusParam && statusParam !== "all" && validStatuses.includes(statusParam as VoterStatus)
+      ? statusParam as VoterStatus
+      : undefined;
     
     const visitedParam = searchParams.get("visited");
     const visited = visitedParam && ["all", "visited", "unvisited"].includes(visitedParam) 
