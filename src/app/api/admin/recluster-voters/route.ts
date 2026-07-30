@@ -112,6 +112,8 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
 
     for (let index = 0; index < page.items.length; index++) {
       const voter = page.items[index];
+      // Skip manually-corrected voters — their area is authoritative
+      if ((voter as { areaClusterSource?: string }).areaClusterSource === "manual") continue;
       const classification = classifications[index];
       const shouldApplyClassification =
         classification.reasonCode === "matched_existing_cluster" ||
@@ -169,14 +171,15 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
       updates.push({
         voterId: voter._id,
         areaCluster: finalAreaCluster,
-        areaClusterSource:
+        areaClusterSource: (
           useSuggestedCluster && classification.source === "llm"
             ? "llm"
             : finalAreaCluster === "Pimple Saudagar Core"
               ? "fallback"
               : voter.areaCluster === finalAreaCluster
-                ? (voter.areaClusterSource ?? "rule")
-                : classification.source,
+                ? (voter.areaClusterSource === "manual" ? "rule" : voter.areaClusterSource ?? "rule")
+                : classification.source
+        ) as "rule" | "llm" | "fallback",
         areaClusterConfidence: classification.confidence,
         areaClusterNeedsReview: classification.needsReview,
         areaClusterReasonCode: classification.reasonCode,

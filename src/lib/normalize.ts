@@ -108,6 +108,26 @@ const GENERIC_CLUSTER_WORDS = new Set([
   "block",
 ]);
 
+const CLUSTER_SUFFIX_WORDS = [
+  "residency",
+  "residence",
+  "society",
+  "apartment",
+  "apartments",
+  "heights",
+  "hights",
+  "palace",
+  "avenue",
+  "garden",
+  "park",
+  "colony",
+  "nagar",
+  "niwas",
+  "complex",
+  "tower",
+  "towers",
+];
+
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -148,6 +168,50 @@ function stripLeadingUnitFragments(value: string): string {
   }
 
   return next;
+}
+
+function extractNamedClusterPhrase(value: string): string | null {
+  const simplified = simplify(stripLeadingUnitFragments(value));
+  if (!simplified) {
+    return null;
+  }
+
+  const tokens = simplified.split(" ").filter(Boolean);
+  for (let index = 0; index < tokens.length; index++) {
+    if (!CLUSTER_SUFFIX_WORDS.includes(tokens[index])) {
+      continue;
+    }
+
+    let start = Math.max(0, index - 3);
+    while (
+      start < index &&
+      (ROAD_WORDS.has(tokens[start]) ||
+        GENERIC_LOCALITY_WORDS.has(tokens[start]) ||
+        UNIT_ONLY_WORDS.has(tokens[start]) ||
+        /^[a-z]$/i.test(tokens[start]) ||
+        /^[a-z]?\d+[a-z]?$/i.test(tokens[start]))
+    ) {
+      start++;
+    }
+
+    const phraseTokens = tokens.slice(start, index + 1).filter((token) => {
+      return (
+        !ROAD_WORDS.has(token) &&
+        !UNIT_ONLY_WORDS.has(token) &&
+        !/^[a-z]$/i.test(token) &&
+        !/^[a-z]?\d+[a-z]?$/i.test(token)
+      );
+    });
+
+    const meaningfulTokens = phraseTokens.filter((token) => !GENERIC_CLUSTER_WORDS.has(token));
+    if (meaningfulTokens.length === 0) {
+      continue;
+    }
+
+    return toTitleCase(phraseTokens.join(" "));
+  }
+
+  return null;
 }
 
 function toAsciiDisplayText(value: string): string {
@@ -214,6 +278,11 @@ export function buildDisplayAddress(addressRaw: string): string {
 
 function fallbackAreaCluster(address: string): string {
   const firstSegment = cleanSegment(address.split(",")[0] ?? address);
+  const namedCluster = extractNamedClusterPhrase(address) ?? extractNamedClusterPhrase(firstSegment);
+  if (namedCluster) {
+    return namedCluster;
+  }
+
   const withoutPrefix = normalizeWhitespace(firstSegment.replace(FLAT_PREFIX, " "));
   const stripped = withoutPrefix
     .replace(/\b\d+[a-z/-]*\b/gi, " ")
@@ -221,7 +290,7 @@ function fallbackAreaCluster(address: string): string {
   const tokens = stripped
     .split(" ")
     .map((token) => token.trim())
-    .filter((token) => token.length >= 4);
+    .filter((token) => token.length >= 4 && !ROAD_WORDS.has(token.toLowerCase()));
 
   if (tokens.length === 0) {
     return "Pimple Saudagar Core";

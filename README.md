@@ -71,6 +71,26 @@ Admin upload flow:
 - Upload a cleaned CSV with the existing cleaned schema
 - The app upserts voters, preserves field status, and refreshes the SQLite store
 
+To sync Part 355's pending serial-number list into the existing Pending/Done
+filter and cluster counts, generate the status-enriched CSV:
+
+```bash
+python3 scripts/add_part_status.py \
+  --pending-file /path/to/Part_355_All_Serial_Numbers.txt
+```
+
+Then upload `data/output/merged/ecinet_1_1530_part_355_status.csv` from `/upload`.
+Rows with serial numbers in the supplied list are imported as `pending`; all
+other Part 355 rows are imported as `done`.
+
+For subsequent updates, use the **Update pending list — Part 355** form on
+`/upload`. Paste the current pending Part Serial Nos. as comma-separated
+numbers and submit. The app updates Convex directly, so the existing Pending,
+Done, and cluster filters and all exports reflect the new statuses.
+
+The generated CSV includes `part_no`, `part_serial_no`, and `status`. The app's
+default CSV/PDF exports also include Part No. and Part Serial No.
+
 Field flow:
 
 - Open `/` on the phone

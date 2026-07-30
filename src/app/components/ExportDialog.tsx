@@ -6,11 +6,9 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import {
@@ -23,988 +21,459 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { toast } from "sonner"
-import jsPDF from "jspdf"
-import autoTable from "jspdf-autotable"
+import {
+  COLUMN_DEFS,
+  downloadCSV,
+  downloadGroupedCSV,
+  downloadPDF,
+  downloadGroupedPDF,
+  type ExportVoter,
+  type BlankColumnConfig,
+  type PDFOptions,
+} from "@/lib/export/engine"
 
 interface ExportDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  voters: Voter[]
-  filters: Filters
+  voters: ExportVoter[]
+  filterLabels?: string[]
 }
 
-interface Voter {
-  _id: string
-  name: string
-  status: string
-  visited?: boolean
-  areaCluster: string
-  displayAddress: string
-  phoneNumber?: string
-  age: string
-  gender: string
-  relativeName?: string
-  relativeType?: string
-  epicNumber?: string
-  distance?: number
-}
+type ExportFormat = "csv" | "pdf" | "grouped"
 
-interface Filters {
-  status: string
-  visited: string
-  name: string
-  phone: string
-  address: string
-  gender: string
-  minAge: string
-  maxAge: string
-  areaCluster: string
-  phoneOnly: boolean
-  includeVague: boolean
-  includeMissing: boolean
-}
-
-interface ColumnConfig {
-  key: keyof Voter
-  label: string
-  default: boolean
-}
-
-const columns: ColumnConfig[] = [
-  { key: "name", label: "Name", default: true },
-  { key: "phoneNumber", label: "Phone", default: true },
-  { key: "displayAddress", label: "Address", default: true },
-  { key: "status", label: "Status", default: false },
-  { key: "visited", label: "Visited", default: false },
-  { key: "areaCluster", label: "Area", default: false },
-  { key: "age", label: "Age", default: false },
-  { key: "gender", label: "Gender", default: false },
-  { key: "relativeName", label: "Relative Name", default: false },
-  { key: "relativeType", label: "Relative Type", default: false },
-  { key: "epicNumber", label: "EPIC Number", default: false },
-  { key: "distance", label: "Distance (km)", default: false },
-]
-
-export function ExportDialog({ open, onOpenChange, voters, filters }: ExportDialogProps) {
+export function ExportDialog({ open, onOpenChange, voters, filterLabels }: ExportDialogProps) {
+  // Step 1 — Columns
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    columns.filter((c) => c.default).map((c) => c.key as string)
+    COLUMN_DEFS.filter(c => c.default).map(c => c.key)
   )
-  
-  // Blank column settings
-  const [blankColumnCount, setBlankColumnCount] = useState<number>(0)
-  const [blankColumnHeaders, setBlankColumnHeaders] = useState<boolean>(false)
-  const [blankColumnPattern, setBlankColumnPattern] = useState<string>("Notes {n}")
-  const [blankColumnWidth, setBlankColumnWidth] = useState<number>(15) // Width in character spaces (default ~1 inch)
-  
-  // PDF options
-  const [pdfPageSize, setPdfPageSize] = useState<"a4" | "letter" | "legal">("a4")
-  const [pdfOrientation, setPdfOrientation] = useState<"portrait" | "landscape">("portrait")
+  const [blankEnabled, setBlankEnabled] = useState(false)
+  const [blankColumns, setBlankColumns] = useState<BlankColumnConfig>({
+    count: 2,
+    headers: false,
+    pattern: "Notes {n}",
+    widthChars: 15,
+  })
+
+  // Step 2 — Format
+  const [format, setFormat] = useState<ExportFormat>("csv")
+  const [pageSize, setPageSize] = useState<"a4" | "letter" | "legal">("a4")
+  const [orientation, setOrientation] = useState<"portrait" | "landscape">("portrait")
   const [includeTitle, setIncludeTitle] = useState(true)
   const [includeTimestamp, setIncludeTimestamp] = useState(true)
   const [includeFilters, setIncludeFilters] = useState(true)
-  
-  // Grouped export options
-  const [groupByField] = useState<"areaCluster">("areaCluster")
   const [sortGroupsBy, setSortGroupsBy] = useState<"alphabetical" | "count">("alphabetical")
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc")
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc")
   const [newPagePerGroup, setNewPagePerGroup] = useState(true)
   const [includeGroupHeader, setIncludeGroupHeader] = useState(true)
   const [includeSummaryPage, setIncludeSummaryPage] = useState(true)
-  
+
   const [isExporting, setIsExporting] = useState(false)
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["columns", "blank", "options"]))
 
-  const activeColumnCount = selectedColumns.length
+  const effectiveBlank = blankEnabled ? blankColumns : { count: 0, headers: false, pattern: "Notes {n}", widthChars: 15 }
 
-  // Generate preview of blank column headers
-  const blankColumnPreview = useMemo(() => {
-    if (blankColumnCount === 0) return []
-    if (!blankColumnHeaders) return Array(blankColumnCount).fill("")
-    return Array.from({ length: blankColumnCount }, (_, i) => 
-      blankColumnPattern.replace("{n}", String(i + 1))
+  const blankPreview = useMemo(() => {
+    if (!blankEnabled || blankColumns.count === 0) return []
+    if (!blankColumns.headers) return Array(blankColumns.count).fill("")
+    return Array.from({ length: blankColumns.count }, (_, i) =>
+      blankColumns.pattern.replace("{n}", String(i + 1))
     )
-  }, [blankColumnCount, blankColumnHeaders, blankColumnPattern])
+  }, [blankEnabled, blankColumns])
 
-  const handleColumnToggle = (columnKey: string) => {
-    setSelectedColumns((prev) =>
-      prev.includes(columnKey)
-        ? prev.filter((k) => k !== columnKey)
-        : [...prev, columnKey]
-    )
-  }
+  const allHeaders = useMemo(() => {
+    const data = COLUMN_DEFS.filter(c => selectedColumns.includes(c.key)).map(c => c.label)
+    return [...data, ...blankPreview]
+  }, [selectedColumns, blankPreview])
 
-  const handleSelectAll = () => {
-    setSelectedColumns(columns.map((c) => c.key as string))
-  }
+  // Summary line for step 3
+  const summary = useMemo(() => {
+    const cols = selectedColumns.length
+    const blank = effectiveBlank.count
+    const fmt = format === "csv" ? "CSV" : format === "pdf" ? "PDF" : "Grouped PDF"
+    const layout = format !== "csv" ? ` · ${pageSize.toUpperCase()} ${orientation}` : ""
+    const blankStr = blank > 0 ? ` + ${blank} blank` : ""
+    return `Exporting ${voters.length} voters · ${cols} columns${blankStr} · ${fmt}${layout}`
+  }, [voters.length, selectedColumns.length, effectiveBlank.count, format, pageSize, orientation])
 
-  const handleDeselectAll = () => {
-    setSelectedColumns([])
-  }
-
-  const toggleSection = (section: string) => {
-    setExpandedSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(section)) {
-        next.delete(section)
-      } else {
-        next.add(section)
-      }
-      return next
-    })
-  }
-
-  const getAllHeaders = () => {
-    const dataHeaders = columns
-      .filter((c) => selectedColumns.includes(c.key as string))
-      .map((c) => c.label)
-    return [...dataHeaders, ...blankColumnPreview]
-  }
-
-  // Group voters by area
-  const groupVotersByArea = () => {
-    const groups = new Map<string, Voter[]>()
-    voters.forEach((voter) => {
-      const key = voter[groupByField]
-      if (!groups.has(key)) {
-        groups.set(key, [])
-      }
-      groups.get(key)!.push(voter)
-    })
-    
-    // Sort groups
-    let sortedGroups = Array.from(groups.entries())
-    if (sortGroupsBy === "alphabetical") {
-      sortedGroups.sort((a, b) => {
-        const comparison = a[0].localeCompare(b[0])
-        return sortDirection === "asc" ? comparison : -comparison
-      })
-    } else {
-      sortedGroups.sort((a, b) => {
-        const comparison = a[1].length - b[1].length
-        return sortDirection === "asc" ? comparison : -comparison
-      })
-    }
-    
-    return sortedGroups
-  }
-
-  const exportToCSV = (grouped: boolean = false) => {
-    if (selectedColumns.length === 0 && blankColumnCount === 0) {
-      toast.error("Please select at least one column or add blank columns")
+  function handleExport() {
+    if (selectedColumns.length === 0 && effectiveBlank.count === 0) {
+      toast.error("Select at least one column")
       return
     }
-
     setIsExporting(true)
     try {
-      const headers = getAllHeaders()
-      
-      if (!grouped) {
-        // Standard CSV export
-        const rows = voters.map((voter) =>
-          [...getVoterRowData(voter), ...Array(blankColumnCount).fill("")]
-        )
-
-        const csvContent = [headers, ...rows]
-          .map((row) =>
-            row
-              .map((cell) => {
-                const stringCell = String(cell)
-                if (stringCell.includes(",") || stringCell.includes('"') || stringCell.includes("\n")) {
-                  return `"${stringCell.replace(/"/g, '""')}"`
-                }
-                return stringCell
-              })
-              .join(",")
-          )
-          .join("\n")
-
-        downloadCSV(csvContent, `voters_export_${new Date().toISOString().split("T")[0]}.csv`)
-        toast.success(`Exported ${voters.length} voters to CSV`)
-      } else {
-        // Grouped CSV export with area separators
-        const groups = groupVotersByArea()
-        let csvContent = ""
-        
-        // Add summary if enabled
-        if (includeSummaryPage) {
-          csvContent += "AREA SUMMARY\n"
-          csvContent += `Total Areas,${groups.length}\n`
-          csvContent += `Total Voters,${voters.length}\n\n`
-          csvContent += "Area,Voter Count\n"
-          groups.forEach(([area, areaVoters]) => {
-            csvContent += `"${area}",${areaVoters.length}\n`
-          })
-          csvContent += "\n\n"
-        }
-        
-        // Add each area
-        groups.forEach(([area, areaVoters], index) => {
-          if (includeGroupHeader) {
-            csvContent += `"${area}",${areaVoters.length} voters\n`
-          }
-          
-          // Headers
-          csvContent += headers.join(",") + "\n"
-          
-          // Data rows
-          areaVoters.forEach((voter) => {
-            const row = [...getVoterRowData(voter), ...Array(blankColumnCount).fill("")]
-            csvContent += row
-              .map((cell) => {
-                const stringCell = String(cell)
-                if (stringCell.includes(",") || stringCell.includes('"') || stringCell.includes("\n")) {
-                  return `"${stringCell.replace(/"/g, '""')}"`
-                }
-                return stringCell
-              })
-              .join(",") + "\n"
-          })
-          
-          // Add separator between areas (except last)
-          if (index < groups.length - 1) {
-            csvContent += "\n\n"
-          }
-        })
-
-        downloadCSV(csvContent, `voters_grouped_${new Date().toISOString().split("T")[0]}.csv`)
-        toast.success(`Exported ${voters.length} voters in ${groups.length} groups to CSV`)
+      const csvOpts = {
+        selectedColumns,
+        blankColumns: effectiveBlank,
+        includeGroupHeader,
+        includeSummary: includeSummaryPage,
       }
-      
-      onOpenChange(false)
-    } catch (error) {
-      toast.error("Failed to export CSV")
-      console.error(error)
-    } finally {
-      setIsExporting(false)
-    }
-  }
-
-  const getVoterRowData = (voter: Voter): string[] => {
-    return columns
-      .filter((c) => selectedColumns.includes(c.key as string))
-      .map((c) => {
-        const value = voter[c.key]
-        if (c.key === "visited") return value ? "Yes" : "No"
-        if (c.key === "distance") return value !== undefined ? (value as number).toFixed(2) : ""
-        return String(value ?? "")
-      })
-  }
-
-  const downloadCSV = (content: string, filename: string) => {
-    const blob = new Blob(["\ufeff" + content], { type: "text/csv;charset=utf-8;" })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement("a")
-    link.href = url
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-  }
-
-  const exportToPDF = (grouped: boolean = false) => {
-    if (selectedColumns.length === 0 && blankColumnCount === 0) {
-      toast.error("Please select at least one column or add blank columns")
-      return
-    }
-
-    setIsExporting(true)
-    try {
-      const pageSize = pdfPageSize
-      const orientation = pdfOrientation
-
-      const doc = new jsPDF({
+      const pdfOpts: PDFOptions = {
+        selectedColumns,
+        blankColumns: effectiveBlank,
+        pageSize,
         orientation,
-        unit: "mm",
-        format: pageSize,
-      })
-
-      if (!grouped) {
-        // Standard PDF export
-        exportStandardPDF(doc)
-      } else {
-        // Grouped PDF export
-        exportGroupedPDF(doc)
+        includeTitle,
+        includeTimestamp,
+        includeFilters,
+        filterLabels,
+        sortGroupsBy,
+        sortDir,
+        newPagePerGroup,
+        includeGroupHeader,
+        includeSummaryPage,
       }
 
-      doc.save(`voters_${grouped ? 'grouped_' : ''}${new Date().toISOString().split("T")[0]}.pdf`)
-      toast.success(`Exported ${voters.length} voters to ${grouped ? 'grouped ' : ''}PDF`)
+      if (format === "csv") {
+        downloadCSV(voters, csvOpts)
+        toast.success(`Exported ${voters.length} voters to CSV`)
+      } else if (format === "pdf") {
+        downloadPDF(voters, pdfOpts)
+        toast.success(`Exported ${voters.length} voters to PDF`)
+      } else {
+        const grpOpts = { sortBy: sortGroupsBy, sortDir }
+        downloadGroupedCSV(voters, csvOpts, grpOpts)
+        downloadGroupedPDF(voters, pdfOpts)
+        toast.success(`Exported ${voters.length} voters as grouped PDF + CSV`)
+      }
       onOpenChange(false)
-    } catch (error) {
-      toast.error("Failed to export PDF")
-      console.error(error)
+    } catch (err) {
+      toast.error("Export failed")
+      console.error(err)
     } finally {
       setIsExporting(false)
     }
   }
-
-  const exportStandardPDF = (doc: jsPDF) => {
-    let startY = 14
-
-    // Title header
-    if (includeTitle) {
-      doc.setFontSize(20)
-      doc.setFont("helvetica", "bold")
-      doc.text("Voter Export Report", 14, startY)
-      startY += 10
-    }
-
-    // Timestamp
-    if (includeTimestamp) {
-      doc.setFontSize(10)
-      doc.setFont("helvetica", "normal")
-      doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, startY)
-      startY += 6
-    }
-
-    // Total count
-    doc.text(`Total Records: ${voters.length}`, 14, startY)
-    startY += 10
-
-    // Filter summary
-    if (includeFilters) {
-      const activeFilters = getActiveFilters()
-      if (activeFilters.length > 0) {
-        doc.setFontSize(9)
-        doc.setFont("helvetica", "italic")
-        const filterText = `Filters: ${activeFilters.join(" | ")}`
-        // Wrap long filter text
-        const splitText = doc.splitTextToSize(filterText, doc.internal.pageSize.getWidth() - 28)
-        doc.text(splitText, 14, startY)
-        startY += splitText.length * 4 + 6
-      }
-    }
-
-    // Table
-    createPDFTable(doc, voters, startY)
-  }
-
-  const exportGroupedPDF = (doc: jsPDF) => {
-    const groups = groupVotersByArea()
-    let currentY = 14
-    let isFirstPage = true
-
-    // Summary page
-    if (includeSummaryPage) {
-      if (includeTitle) {
-        doc.setFontSize(20)
-        doc.setFont("helvetica", "bold")
-        doc.text("Voter Export Report - Grouped by Area", 14, currentY)
-        currentY += 12
-      }
-
-      if (includeTimestamp) {
-        doc.setFontSize(10)
-        doc.setFont("helvetica", "normal")
-        doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, currentY)
-        currentY += 8
-      }
-
-      // Summary table
-      doc.setFontSize(12)
-      doc.setFont("helvetica", "bold")
-      doc.text("Area Summary", 14, currentY)
-      currentY += 8
-
-      autoTable(doc, {
-        head: [["Area", "Voter Count"]],
-        body: groups.map(([area, areaVoters]) => [area, areaVoters.length]),
-        startY: currentY,
-        theme: "striped",
-        headStyles: {
-          fillColor: [41, 128, 185],
-          textColor: 255,
-          fontStyle: "bold",
-        },
-        styles: {
-          fontSize: 10,
-        },
-      })
-
-      doc.addPage()
-      isFirstPage = false
-      currentY = 14
-    }
-
-    // Each area
-    groups.forEach(([area, areaVoters], index) => {
-      if (!isFirstPage && newPagePerGroup) {
-        doc.addPage()
-        currentY = 14
-      }
-
-      // Group header
-      if (includeGroupHeader) {
-        doc.setFontSize(14)
-        doc.setFont("helvetica", "bold")
-        doc.text(area, 14, currentY)
-        currentY += 6
-
-        doc.setFontSize(9)
-        doc.setFont("helvetica", "normal")
-        
-        // Calculate status breakdown
-        const pending = areaVoters.filter(v => v.status === "pending").length
-        const done = areaVoters.filter(v => v.status === "done").length
-        const revisit = areaVoters.filter(v => v.status === "revisit").length
-        
-        doc.text(`${areaVoters.length} voters | Pending: ${pending} | Done: ${done} | Revisit: ${revisit}`, 14, currentY)
-        currentY += 10
-      }
-
-      // Table for this group
-      const finalY = createPDFTable(doc, areaVoters, currentY, true)
-      
-      isFirstPage = false
-      currentY = finalY + 10
-
-      // Add new page if needed and not already added
-      if (index < groups.length - 1 && !newPagePerGroup && currentY > doc.internal.pageSize.getHeight() - 40) {
-        doc.addPage()
-        currentY = 14
-        isFirstPage = true
-      }
-    })
-  }
-
-  const createPDFTable = (doc: jsPDF, data: Voter[], startY: number, isGrouped: boolean = false): number => {
-    const headers = getAllHeaders()
-    const body = data.map((voter) =>
-      [...getVoterRowData(voter), ...Array(blankColumnCount).fill("")]
-    )
-
-    // Calculate column styles for blank columns based on character width
-    // Each character space is approximately 2.5mm wide
-    const columnStyles: { [key: number]: { cellWidth: number } } = {}
-    const dataColumnCount = headers.length - blankColumnCount
-    const blankColumnWidthMm = blankColumnWidth * 2.5 // Convert character count to mm
-    
-    // Set custom width for each blank column
-    for (let i = 0; i < blankColumnCount; i++) {
-      columnStyles[dataColumnCount + i] = { cellWidth: blankColumnWidthMm }
-    }
-
-    autoTable(doc, {
-      head: [headers],
-      body,
-      startY,
-      theme: "grid", // Changed to 'grid' for hard borders
-      headStyles: {
-        fillColor: [41, 128, 185],
-        textColor: [0, 0, 0], // Black text
-        fontStyle: "bold",
-        fontSize: 9,
-        lineColor: [0, 0, 0], // Black borders
-        lineWidth: 0.5,
-      },
-      bodyStyles: {
-        fontSize: 8,
-        textColor: [0, 0, 0], // Black text
-        lineColor: [0, 0, 0], // Black borders
-        lineWidth: 0.5,
-      },
-      alternateRowStyles: {
-        fillColor: [245, 245, 245],
-        textColor: [0, 0, 0], // Black text
-      },
-      margin: { top: 10, right: 14, bottom: 10, left: 14 },
-      styles: {
-        overflow: "linebreak",
-        cellWidth: "auto",
-        textColor: [0, 0, 0], // Black text for all cells
-        lineColor: [0, 0, 0], // Black borders for all cells
-        lineWidth: 0.5,
-      },
-      columnStyles,
-      didDrawPage: !isGrouped ? (data) => {
-        const pageCount = doc.getNumberOfPages()
-        const currentPage = data.pageNumber
-        doc.setFontSize(8)
-        doc.setFont("helvetica", "normal")
-        doc.text(
-          `Page ${currentPage} of ${pageCount}`,
-          doc.internal.pageSize.getWidth() - 30,
-          doc.internal.pageSize.getHeight() - 10
-        )
-      } : undefined,
-    })
-
-    // @ts-expect-error - autoTable adds lastAutoTable property
-    return doc.lastAutoTable?.finalY || startY
-  }
-
-  const getActiveFilters = (): string[] => {
-    const activeFilters: string[] = []
-    if (filters.status !== "all") activeFilters.push(`Status: ${filters.status}`)
-    if (filters.visited !== "all") activeFilters.push(`Visited: ${filters.visited}`)
-    if (filters.name) activeFilters.push(`Name: ${filters.name}`)
-    if (filters.phone) activeFilters.push(`Phone: ${filters.phone}`)
-    if (filters.address) activeFilters.push(`Address: ${filters.address}`)
-    if (filters.gender) activeFilters.push(`Gender: ${filters.gender}`)
-    if (filters.areaCluster) activeFilters.push(`Area: ${filters.areaCluster}`)
-    return activeFilters
-  }
-
-  const SectionHeader = ({ title, section, icon: Icon }: { title: string; section: string; icon: any }) => (
-    <button
-      onClick={() => toggleSection(section)}
-      className="flex items-center justify-between w-full py-4 px-6 bg-muted/50 hover:bg-muted rounded-lg transition-colors"
-    >
-      <div className="flex items-center gap-3">
-        {Icon && <Icon className="size-5 text-muted-foreground" />}
-        <span className="font-semibold text-lg">{title}</span>
-      </div>
-      {expandedSections.has(section) ? (
-        <ChevronUp className="size-5 text-muted-foreground" />
-      ) : (
-        <ChevronDown className="size-5 text-muted-foreground" />
-      )}
-    </button>
-  )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[90vw] xl:max-w-6xl max-h-[90vh] overflow-y-auto p-0">
-        <DialogHeader className="px-8 pt-8 pb-6 border-b">
-          <DialogTitle className="flex items-center gap-3 text-2xl">
-            <Download className="size-6" />
+      <DialogContent className="w-[95vw] sm:max-w-2xl h-[92dvh] max-h-[92dvh] sm:h-auto sm:max-h-[85vh] p-0 flex flex-col overflow-hidden">
+        <DialogHeader className="px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b shrink-0">
+          <DialogTitle className="flex items-center gap-2 text-xl">
+            <Download className="size-5" />
             Export Voters
           </DialogTitle>
-          <DialogDescription className="text-base mt-2">
-            Export {voters.length} filtered voters with your selected columns and options
-          </DialogDescription>
+          <p className="text-sm text-muted-foreground mt-1">{voters.length} voters · choose columns and format</p>
         </DialogHeader>
 
-        <div className="px-8 py-6 space-y-8">
-          {/* Column Selection Section */}
-          <div className="space-y-4">
-            <SectionHeader title="Column Selection" section="columns" icon={Layers} />
-            
-            {expandedSections.has("columns") && (
-              <div className="px-6 pt-4 space-y-5">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">
-                    {activeColumnCount} of {columns.length} data columns selected
-                  </span>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={handleSelectAll}>
-                      Select All
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={handleDeselectAll}>
-                      Deselect All
-                    </Button>
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-x-6 gap-y-3 p-4 bg-muted/30 rounded-lg">
-                  {columns.map((column) => (
-                    <div key={column.key} className="flex items-center gap-2 min-w-0">
-                      <Checkbox
-                        id={`col-${column.key}`}
-                        checked={selectedColumns.includes(column.key as string)}
-                        onCheckedChange={() => handleColumnToggle(column.key as string)}
-                        className="shrink-0"
-                      />
-                      <Label
-                        htmlFor={`col-${column.key}`}
-                        className="text-sm font-normal cursor-pointer truncate"
-                      >
-                        {column.label}
-                      </Label>
-                      {column.default && (
-                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">
-                          Default
-                        </Badge>
-                      )}
-                    </div>
-                  ))}
-                </div>
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-7">
+          {/* ── Step 1: Columns ─────────────────────────────────────────── */}
+          <section className="space-y-4">
+            <StepLabel n={1} title="Columns" />
+
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">{selectedColumns.length} of {COLUMN_DEFS.length} selected</span>
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" className="h-9 sm:h-7 text-xs" onClick={() => setSelectedColumns(COLUMN_DEFS.map(c => c.key))}>All</Button>
+                <Button variant="ghost" size="sm" className="h-9 sm:h-7 text-xs" onClick={() => setSelectedColumns([])}>None</Button>
               </div>
-            )}
-          </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-1 sm:gap-y-2.5 p-2 sm:p-4 bg-muted/30 rounded-lg">
+              {COLUMN_DEFS.map(col => (
+                <CheckRow
+                  key={col.key}
+                  id={`col-${col.key}`}
+                  label={col.label}
+                  checked={selectedColumns.includes(col.key)}
+                  onCheckedChange={() =>
+                    setSelectedColumns(prev =>
+                      prev.includes(col.key) ? prev.filter(k => k !== col.key) : [...prev, col.key]
+                    )
+                  }
+                  badge={col.default ? <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">Default</Badge> : undefined}
+                />
+              ))}
+            </div>
+
+            {/* Blank columns — collapsed until toggled */}
+            <div className="space-y-3">
+              <SwitchRow label="Add blank columns for notes" checked={blankEnabled} onCheckedChange={setBlankEnabled} />
+
+              {blankEnabled && (
+                <div className="pl-2 space-y-4 pt-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Count</Label>
+                      <Input
+                        type="number" min={1} max={10}
+                        value={blankColumns.count}
+                        onChange={e => setBlankColumns(p => ({ ...p, count: Math.max(1, parseInt(e.target.value) || 1) }))}
+                        className="h-11 sm:h-8"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Width (chars ≈ {Math.round(blankColumns.widthChars * 2.5)}mm)</Label>
+                      <Input
+                        type="number" min={1} max={50}
+                        value={blankColumns.widthChars}
+                        onChange={e => setBlankColumns(p => ({ ...p, widthChars: Math.max(1, Math.min(50, parseInt(e.target.value) || 15)) }))}
+                        className="h-11 sm:h-8"
+                      />
+                    </div>
+                  </div>
+                  <CheckRow
+                    id="blank-headers"
+                    label="Label blank columns"
+                    checked={blankColumns.headers}
+                    onCheckedChange={(v) => setBlankColumns(p => ({ ...p, headers: v }))}
+                  />
+                  {blankColumns.headers && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Pattern (use {"{n}"} for number)</Label>
+                      <Input
+                        value={blankColumns.pattern}
+                        onChange={e => setBlankColumns(p => ({ ...p, pattern: e.target.value }))}
+                        placeholder="Notes {n}"
+                      />
+                    </div>
+                  )}
+                  {blankEnabled && blankColumns.count > 0 && (
+                    <div className="bg-muted/30 p-3 rounded-lg">
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2">
+                        <Eye className="size-3" /> Column header preview:
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {allHeaders.map((h, i) => (
+                          <Badge key={i} variant={i < selectedColumns.length ? "default" : "secondary"} className="text-[10px] px-2 py-0.5">
+                            {h || "(blank)"}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
 
           <Separator />
 
-          {/* Blank Columns Section */}
-          <div className="space-y-4">
-            <SectionHeader title="Blank Columns" section="blank" icon={Layers} />
-            
-            {expandedSections.has("blank") && (
-              <div className="px-6 pt-4 space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <div className="space-y-3">
-                    <Label htmlFor="blank-count">Number of Blank Columns</Label>
-                    <Input
-                      id="blank-count"
-                      type="number"
-                      min={0}
-                      value={blankColumnCount}
-                      onChange={(e) => setBlankColumnCount(Math.max(0, parseInt(e.target.value) || 0))}
-                      placeholder="Enter number (0 or more)"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Add empty columns for manual notes
-                    </p>
+          {/* ── Step 2: Format ──────────────────────────────────────────── */}
+          <section className="space-y-4">
+            <StepLabel n={2} title="Format & Layout" />
+
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
+              <FormatCard
+                icon={<FileSpreadsheet className="size-5" />}
+                label="CSV"
+                description="Spreadsheet"
+                selected={format === "csv"}
+                onClick={() => setFormat("csv")}
+              />
+              <FormatCard
+                icon={<FileText className="size-5" />}
+                label="PDF"
+                description="Print-ready"
+                selected={format === "pdf"}
+                onClick={() => setFormat("pdf")}
+              />
+              <FormatCard
+                icon={<Layers className="size-5" />}
+                label="Grouped PDF"
+                description="By area"
+                selected={format === "grouped"}
+                onClick={() => setFormat("grouped")}
+              />
+            </div>
+
+            {/* Shared layout controls — only when PDF/Grouped */}
+            {(format === "pdf" || format === "grouped") && (
+              <div className="space-y-4 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Page Size</Label>
+                    <Select value={pageSize} onValueChange={v => setPageSize(v as typeof pageSize)}>
+                      <SelectTrigger className="w-full h-11 sm:h-8"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="a4">A4</SelectItem>
+                        <SelectItem value="letter">Letter</SelectItem>
+                        <SelectItem value="legal">Legal</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-
-                  {blankColumnCount > 0 && (
-                    <div className="space-y-3">
-                      <Label htmlFor="blank-width">Blank Column Width</Label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          id="blank-width"
-                          type="number"
-                          min={1}
-                          max={50}
-                          value={blankColumnWidth}
-                          onChange={(e) => setBlankColumnWidth(Math.max(1, Math.min(50, parseInt(e.target.value) || 15)))}
-                          placeholder="Character spaces"
-                        />
-                        <span className="text-sm text-muted-foreground whitespace-nowrap">
-                          chars
-                        </span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        ≈ {Math.round(blankColumnWidth * 2.5)}mm ({(blankColumnWidth * 2.5 / 25.4).toFixed(1)} inches)
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="space-y-3">
-                    <div className="flex items-center space-x-3">
-                      <Checkbox
-                        id="blank-headers"
-                        checked={blankColumnHeaders}
-                        onCheckedChange={(checked) => setBlankColumnHeaders(checked as boolean)}
-                      />
-                      <Label htmlFor="blank-headers" className="font-medium">
-                        Add headers to blank columns
-                      </Label>
-                    </div>
-                    
-                    {blankColumnHeaders && (
-                      <div className="space-y-2 pl-6">
-                        <Label htmlFor="blank-pattern" className="text-sm">
-                          Header Pattern (use {"{n}"} for number)
-                        </Label>
-                        <Input
-                          id="blank-pattern"
-                          value={blankColumnPattern}
-                          onChange={(e) => setBlankColumnPattern(e.target.value)}
-                          placeholder="e.g., Notes {n}"
-                        />
-                      </div>
-                    )}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Orientation</Label>
+                    <Select value={orientation} onValueChange={v => setOrientation(v as typeof orientation)}>
+                      <SelectTrigger className="w-full h-11 sm:h-8"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="portrait">Portrait</SelectItem>
+                        <SelectItem value="landscape">Landscape</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
 
-                {/* Preview */}
-                {blankColumnCount > 0 && (
-                  <div className="bg-muted/30 p-4 rounded-lg space-y-3">
-                    <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                      <Eye className="size-4" />
-                      Preview of all column headers:
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Include in PDF</Label>
+                  <div className="flex flex-col sm:flex-row sm:flex-wrap gap-x-6 gap-y-0.5">
+                    {[
+                      { id: "title", label: "Title", value: includeTitle, set: setIncludeTitle },
+                      { id: "ts", label: "Timestamp", value: includeTimestamp, set: setIncludeTimestamp },
+                      { id: "fl", label: "Filter summary", value: includeFilters, set: setIncludeFilters },
+                    ].map(opt => (
+                      <CheckRow key={opt.id} id={opt.id} label={opt.label} checked={opt.value} onCheckedChange={opt.set} />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Grouped-only options */}
+                {format === "grouped" && (
+                  <div className="space-y-3 pt-1">
+                    <Separator />
+                    <Label className="text-xs text-muted-foreground">Grouping Options</Label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">Sort areas by</Label>
+                        <Select value={sortGroupsBy} onValueChange={v => setSortGroupsBy(v as typeof sortGroupsBy)}>
+                          <SelectTrigger className="w-full h-11 sm:h-8"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="alphabetical">Alphabetical</SelectItem>
+                            <SelectItem value="count">Voter Count</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">Direction</Label>
+                        <Select value={sortDir} onValueChange={v => setSortDir(v as typeof sortDir)}>
+                          <SelectTrigger className="w-full h-11 sm:h-8"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="asc">Ascending</SelectItem>
+                            <SelectItem value="desc">Descending</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {getAllHeaders().map((header, index) => (
-                        <Badge 
-                          key={index} 
-                          variant={index < activeColumnCount ? "default" : "secondary"}
-                          className="text-xs py-1 px-3"
-                        >
-                          {header || "(blank)"}
-                        </Badge>
+                    <div className="flex flex-col sm:flex-row sm:flex-wrap gap-x-6 gap-y-0.5">
+                      {[
+                        { id: "nppg", label: "New page per area", value: newPagePerGroup, set: setNewPagePerGroup },
+                        { id: "gh", label: "Area headers", value: includeGroupHeader, set: setIncludeGroupHeader },
+                        { id: "sp", label: "Summary page", value: includeSummaryPage, set: setIncludeSummaryPage },
+                      ].map(opt => (
+                        <CheckRow key={opt.id} id={opt.id} label={opt.label} checked={opt.value} onCheckedChange={opt.set} />
                       ))}
                     </div>
                   </div>
                 )}
               </div>
             )}
-          </div>
+          </section>
 
           <Separator />
 
-          {/* Export Options Section */}
-          <div className="space-y-4">
-            <SectionHeader title="Export Options" section="options" icon={FileText} />
-            
-            {expandedSections.has("options") && (
-              <div className="px-6 pt-4 space-y-6">
-                <Tabs defaultValue="csv" className="w-full">
-                  <TabsList className="grid w-full grid-cols-3 h-12">
-                    <TabsTrigger value="csv" className="gap-2">
-                      <FileSpreadsheet className="size-4" />
-                      CSV
-                    </TabsTrigger>
-                    <TabsTrigger value="pdf" className="gap-2">
-                      <FileText className="size-4" />
-                      PDF
-                    </TabsTrigger>
-                    <TabsTrigger value="grouped" className="gap-2">
-                      <Layers className="size-4" />
-                      Grouped
-                    </TabsTrigger>
-                  </TabsList>
+          {/* ── Step 3: Review ──────────────────────────────────────────── */}
+          <section className="space-y-4">
+            <StepLabel n={3} title="Review & Export" />
 
-                  {/* CSV Options */}
-                  <TabsContent value="csv" className="space-y-6 mt-6">
-                    <div className="bg-muted/30 p-6 rounded-lg">
-                      <p className="text-sm text-muted-foreground">
-                        Export as CSV file with comma-separated values.
-                        {blankColumnCount > 0 && (
-                          <span> Blank columns will be included at the end of each row.</span>
-                        )}
-                      </p>
-                    </div>
+            <div className="rounded-lg bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+              {summary}
+            </div>
+          </section>
+        </div>
 
-                    <div className="flex justify-end gap-3">
-                      <Button
-                        variant="outline"
-                        onClick={() => onOpenChange(false)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        onClick={() => exportToCSV(false)}
-                        disabled={isExporting || (activeColumnCount === 0 && blankColumnCount === 0)}
-                        className="gap-2"
-                      >
-                        <Download className="size-4" />
-                        {isExporting ? "Exporting..." : "Export CSV"}
-                      </Button>
-                    </div>
-                  </TabsContent>
-
-                  {/* PDF Options */}
-                  <TabsContent value="pdf" className="space-y-6 mt-6">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                      <div className="space-y-3">
-                        <Label>Page Size</Label>
-                        <Select
-                          value={pdfPageSize}
-                          onValueChange={(value) => setPdfPageSize(value as typeof pdfPageSize)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="a4">A4</SelectItem>
-                            <SelectItem value="letter">Letter</SelectItem>
-                            <SelectItem value="legal">Legal</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-3">
-                        <Label>Orientation</Label>
-                        <Select
-                          value={pdfOrientation}
-                          onValueChange={(value) => setPdfOrientation(value as typeof pdfOrientation)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="portrait">Portrait</SelectItem>
-                            <SelectItem value="landscape">Landscape</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-4">
-                        <Label>Include in PDF</Label>
-                        <div className="space-y-3">
-                          <div className="flex items-center space-x-3">
-                            <Checkbox
-                              id="include-title"
-                              checked={includeTitle}
-                              onCheckedChange={(checked) => setIncludeTitle(checked as boolean)}
-                            />
-                            <Label htmlFor="include-title" className="font-normal">
-                              Title header
-                            </Label>
-                          </div>
-                          <div className="flex items-center space-x-3">
-                            <Checkbox
-                              id="include-timestamp"
-                              checked={includeTimestamp}
-                              onCheckedChange={(checked) => setIncludeTimestamp(checked as boolean)}
-                            />
-                            <Label htmlFor="include-timestamp" className="font-normal">
-                              Timestamp
-                            </Label>
-                          </div>
-                          <div className="flex items-center space-x-3">
-                            <Checkbox
-                              id="include-filters-pdf"
-                              checked={includeFilters}
-                              onCheckedChange={(checked) => setIncludeFilters(checked as boolean)}
-                            />
-                            <Label htmlFor="include-filters-pdf" className="font-normal">
-                              Filter summary
-                            </Label>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex justify-end gap-3">
-                      <Button
-                        variant="outline"
-                        onClick={() => onOpenChange(false)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        onClick={() => exportToPDF(false)}
-                        disabled={isExporting || (activeColumnCount === 0 && blankColumnCount === 0)}
-                        className="gap-2"
-                      >
-                        <Download className="size-4" />
-                        {isExporting ? "Exporting..." : "Export PDF"}
-                      </Button>
-                    </div>
-                  </TabsContent>
-
-                  {/* Grouped Options */}
-                  <TabsContent value="grouped" className="space-y-6 mt-6">
-                    <div className="bg-muted/30 p-6 rounded-lg space-y-3">
-                      <h4 className="font-semibold text-base">Group by: Area</h4>
-                      <p className="text-sm text-muted-foreground">
-                        Voters will be organized by their area/cluster, with each area on a separate page/section.
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium">Page Size</Label>
-                        <Select
-                          value={pdfPageSize}
-                          onValueChange={(value) => setPdfPageSize(value as typeof pdfPageSize)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="a4">A4</SelectItem>
-                            <SelectItem value="letter">Letter</SelectItem>
-                            <SelectItem value="legal">Legal</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium">Orientation</Label>
-                        <Select
-                          value={pdfOrientation}
-                          onValueChange={(value) => setPdfOrientation(value as typeof pdfOrientation)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="portrait">Portrait</SelectItem>
-                            <SelectItem value="landscape">Landscape</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-4">
-                        <Label className="text-sm font-medium">Sort Areas By</Label>
-                        <div className="flex gap-3">
-                          <Select
-                            value={sortGroupsBy}
-                            onValueChange={(value) => setSortGroupsBy(value as typeof sortGroupsBy)}
-                          >
-                            <SelectTrigger className="flex-1">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="alphabetical">Alphabetical</SelectItem>
-                              <SelectItem value="count">Voter Count</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <Select
-                            value={sortDirection}
-                            onValueChange={(value) => setSortDirection(value as typeof sortDirection)}
-                          >
-                            <SelectTrigger className="w-28">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="asc">Asc</SelectItem>
-                              <SelectItem value="desc">Desc</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium">PDF Options</Label>
-                        <div className="space-y-2">
-                          <div className="flex items-center space-x-2">
-                            <Checkbox
-                              id="new-page"
-                              checked={newPagePerGroup}
-                              onCheckedChange={(checked) => setNewPagePerGroup(checked as boolean)}
-                            />
-                            <Label htmlFor="new-page" className="font-normal text-sm">
-                              New page per area
-                            </Label>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <Checkbox
-                              id="group-header"
-                              checked={includeGroupHeader}
-                              onCheckedChange={(checked) => setIncludeGroupHeader(checked as boolean)}
-                            />
-                            <Label htmlFor="group-header" className="font-normal text-sm">
-                              Area headers
-                            </Label>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <Checkbox
-                              id="summary-page"
-                              checked={includeSummaryPage}
-                              onCheckedChange={(checked) => setIncludeSummaryPage(checked as boolean)}
-                            />
-                            <Label htmlFor="summary-page" className="font-normal text-sm">
-                              Summary page
-                            </Label>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <Separator />
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <Button
-                        variant="outline"
-                        onClick={() => exportToCSV(true)}
-                        disabled={isExporting || (activeColumnCount === 0 && blankColumnCount === 0)}
-                        className="gap-2"
-                      >
-                        <FileSpreadsheet className="size-4" />
-                        {isExporting ? "Exporting..." : "Grouped CSV"}
-                      </Button>
-                      <Button
-                        onClick={() => exportToPDF(true)}
-                        disabled={isExporting || (activeColumnCount === 0 && blankColumnCount === 0)}
-                        className="gap-2"
-                      >
-                        <FileText className="size-4" />
-                        {isExporting ? "Exporting..." : "Grouped PDF"}
-                      </Button>
-                    </div>
-                  </TabsContent>
-                </Tabs>
-              </div>
-            )}
-          </div>
+        {/* Sticky footer — actions always reachable */}
+        <div className="shrink-0 border-t bg-popover px-4 sm:px-6 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] flex gap-3">
+          <Button variant="ghost" onClick={() => onOpenChange(false)} className="flex-1 h-11 sm:h-8">
+            Cancel
+          </Button>
+          <Button
+            onClick={handleExport}
+            disabled={isExporting || (selectedColumns.length === 0 && effectiveBlank.count === 0)}
+            className="flex-1 h-11 sm:h-8 gap-2"
+          >
+            <Download className="size-4" />
+            {isExporting ? "Exporting…" : "Export"}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function StepLabel({ n, title }: { n: number; title: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
+        {n}
+      </div>
+      <span className="font-semibold">{title}</span>
+    </div>
+  )
+}
+
+function FormatCard({
+  icon, label, description, selected, onClick,
+}: {
+  icon: React.ReactNode
+  label: string
+  description: string
+  selected: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex min-h-11 flex-col items-center justify-center gap-1.5 rounded-xl border-2 p-2 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:gap-2 sm:p-4 ${
+        selected
+          ? "border-primary bg-primary/8"
+          : "border-border hover:border-primary/50 hover:bg-muted/40"
+      }`}
+    >
+      <div className={selected ? "text-primary" : "text-muted-foreground"}>{icon}</div>
+      <div>
+        <p className="text-xs font-semibold sm:text-sm">{label}</p>
+        <p className="hidden text-xs text-muted-foreground sm:block">{description}</p>
+      </div>
+    </button>
+  )
+}
+
+function CheckRow({
+  id, label, checked, onCheckedChange, badge,
+}: {
+  id: string
+  label: string
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+  badge?: React.ReactNode
+}) {
+  return (
+    <div
+      className="-mx-1 flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-1 py-1.5 select-none hover:bg-muted/40 sm:min-h-0"
+      onClick={() => onCheckedChange(!checked)}
+    >
+      <span onClick={e => e.stopPropagation()} className="flex items-center">
+        <Checkbox
+          id={id}
+          checked={checked}
+          onCheckedChange={v => onCheckedChange(v as boolean)}
+        />
+      </span>
+      <Label htmlFor={id} className="flex-1 text-sm font-normal">
+        {label}
+      </Label>
+      {badge}
+    </div>
+  )
+}
+
+function SwitchRow({
+  label, checked, onCheckedChange,
+}: {
+  label: string
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+}) {
+  return (
+    <div
+      className="flex min-h-11 cursor-pointer items-center justify-between gap-2 select-none sm:min-h-0"
+      onClick={() => onCheckedChange(!checked)}
+    >
+      <Label className="text-sm">{label}</Label>
+      <span onClick={e => e.stopPropagation()} className="flex items-center">
+        <Switch checked={checked} onCheckedChange={onCheckedChange} />
+      </span>
+    </div>
   )
 }

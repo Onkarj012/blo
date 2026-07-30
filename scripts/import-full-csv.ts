@@ -22,7 +22,9 @@ import * as fs from "fs";
 import * as path from "path";
 
 const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL || process.env.CONVEX_URL;
-const CSV_PATH = path.join(process.cwd(), "data/output/clean/1_1530_cleaned.csv");
+const CSV_PATH = process.env.CSV_PATH
+  ? path.resolve(process.cwd(), process.env.CSV_PATH)
+  : path.join(process.cwd(), "data/output/clean/1_1530_cleaned.csv");
 const BATCH_SIZE = 250;
 
 if (!CONVEX_URL) {
@@ -42,6 +44,10 @@ interface CsvRow {
   epic_number?: string;
   assembly_constituency?: string;
   district?: string;
+  status?: "pending" | "done" | "locked" | "revisit" | "wrong_address";
+  part_no?: string;
+  part_serial_no?: string;
+  ecinet_part_sr_no?: string;
 }
 
 async function importCSV() {
@@ -62,7 +68,7 @@ async function importCSV() {
   // Create import batch
   console.log("Creating import batch...");
   const batchId = await convex.mutation(api.import.createBatch, {
-    sourceName: "1_1530_cleaned.csv",
+    sourceName: path.basename(CSV_PATH),
     rowsRead: records.length,
     inserted: 0,
     updated: 0,
@@ -182,6 +188,9 @@ async function importCSV() {
         areaClusterLastClassifiedAt: Date.now(),
         addressQuality,
         searchText,
+        partNumber: cleanText(row.part_no),
+        partSerialNumber: cleanText(row.part_serial_no || row.ecinet_part_sr_no),
+        ...(row.status ? { status: row.status } : {}),
         assemblyConstituency: cleanText(row.assembly_constituency),
         district: cleanText(row.district),
         lat,

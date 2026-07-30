@@ -29,6 +29,21 @@ test("canonicalize collapses alias variants and rejects generic road-only labels
   assert.equal(canonicalizeAreaClusterLabel("Pimple Saudagar Road"), null);
 });
 
+test("detectAreaCluster prefers explicit residential complex phrases", () => {
+  assert.equal(
+    detectAreaCluster("B-1203, Triose Apartment Near Govind Garaden Restauran"),
+    "Triose Apartment"
+  );
+  assert.equal(
+    detectAreaCluster("00 Aashirwad Colony Pimple Saudagar"),
+    "Aashirwad Colony"
+  );
+  assert.equal(
+    detectAreaCluster("Kunjir Hights Near P C M C Hospital Pimpale Saudagar"),
+    "Kunjir Hights"
+  );
+});
+
 test("classifier reuses an existing saved cluster before creating a new one", async () => {
   const { results } = await classifyAreaClusters(
     [

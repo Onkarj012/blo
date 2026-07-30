@@ -29,6 +29,12 @@ export async function OPTIONS() {
 
 interface CsvRow {
   name?: string;
+  ecinet_name?: string;
+  ecinet_relative_name?: string;
+  ecinet_part_sr_no?: string;
+  part_no?: string;
+  part_number?: string;
+  part_serial_no?: string;
   phone_number?: string;
   address?: string;
   age?: string;
@@ -38,6 +44,7 @@ interface CsvRow {
   epic_number?: string;
   assembly_constituency?: string;
   district?: string;
+  status?: string;
 }
 
 const REQUIRED_HEADERS = [
@@ -54,6 +61,21 @@ const REQUIRED_HEADERS = [
 
 const BATCH_SIZE = 250;
 const CLASSIFIED_CLUSTER_BATCH_SIZE = 40;
+type ImportStatus = "pending" | "done" | "locked" | "revisit" | "wrong_address";
+
+const VALID_IMPORT_STATUSES: ReadonlySet<ImportStatus> = new Set([
+  "pending",
+  "done",
+  "locked",
+  "revisit",
+  "wrong_address",
+]);
+
+function parseImportStatus(value?: string): ImportStatus | undefined {
+  return value && VALID_IMPORT_STATUSES.has(value as ImportStatus)
+    ? value as ImportStatus
+    : undefined;
+}
 
 type NormalizedCsvRow = {
   source: CsvRow;
@@ -146,16 +168,17 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
       const normalizedRows: NormalizedCsvRow[] = [];
 
       for (const row of batch) {
+        const sourceName = row.name?.trim() || row.ecinet_name?.trim() || "";
         // Skip rows with no name
-        if (!row.name || row.name.trim() === "") {
+        if (!sourceName) {
           totalSkipped++;
           continue;
         }
 
         const displayAddress = buildDisplayAddress(row.address || "");
         const rowFingerprint = buildRowFingerprint({
-          name: row.name,
-          relativeName: row.relative_name,
+          name: sourceName,
+          relativeName: row.relative_name || row.ecinet_relative_name,
           age: row.age || "",
           gender: row.gender || "",
           displayAddress,
@@ -163,7 +186,7 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
           district: row.district || "",
         });
         const searchText = buildSearchText({
-          name: row.name,
+          name: sourceName,
           phoneNumber: row.phone_number,
           displayAddress,
           epicNumber: row.epic_number,
@@ -171,8 +194,8 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
         });
 
         normalizedRows.push({
-          source: row,
-          normalizedName: cleanText(row.name),
+          source: { ...row, name: sourceName },
+          normalizedName: cleanText(sourceName),
           displayAddress,
           rowFingerprint,
           searchText,
@@ -210,6 +233,7 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
       for (let batchIndex = 0; batchIndex < normalizedRows.length; batchIndex++) {
         const row = normalizedRows[batchIndex];
         const source = row.source;
+        const importedStatus = parseImportStatus(source.status);
         const classification = classificationByIndex.get(batchIndex);
         const areaCluster = classification?.areaCluster ?? "Pimple Saudagar Core";
         const addressQuality = determineAddressQuality(source.address || "", areaCluster);
@@ -269,12 +293,19 @@ export const POST = requireAdmin(async (request: AuthenticatedRequest) => {
           areaClusterLastClassifiedAt: Date.now(),
           addressQuality,
           searchText: row.searchText,
+          ...(cleanText(source.part_no || source.part_number)
+            ? {
+                partNumber: cleanText(source.part_no || source.part_number),
+                partSerialNumber: cleanText(source.part_serial_no || source.ecinet_part_sr_no) || undefined,
+              }
+            : {}),
           assemblyConstituency: cleanText(source.assembly_constituency),
           district: cleanText(source.district),
           lat,
           lng,
           geocodeStatus,
           geocodeConfidence: calculateGeocodeConfidence(geocodeStatus, addressQuality),
+          ...(importedStatus ? { status: importedStatus } : {}),
         });
 
         if (

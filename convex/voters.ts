@@ -23,6 +23,7 @@ export const getVoters = query({
     minAge: v.optional(v.number()),
     maxAge: v.optional(v.number()),
     areaCluster: v.optional(v.string()),
+    partNumber: v.optional(v.string()),
     phoneOnly: v.optional(v.boolean()),
     includeVague: v.optional(v.boolean()),
     includeMissing: v.optional(v.boolean()),
@@ -98,6 +99,11 @@ export const getVoters = query({
     // Apply area cluster filter
     if (args.areaCluster) {
       allVoters = allVoters.filter(v => v.areaCluster === args.areaCluster);
+    }
+
+    // Part filtering is used by the admin pending-list synchronizer.
+    if (args.partNumber) {
+      allVoters = allVoters.filter(v => v.partNumber === args.partNumber);
     }
     
     // Apply phone availability filter
@@ -317,6 +323,8 @@ export const upsertVoter = mutation({
       v.literal("missing")
     ),
     searchText: v.string(),
+    partNumber: v.optional(v.string()),
+    partSerialNumber: v.optional(v.string()),
     assemblyConstituency: v.string(),
     district: v.string(),
     lat: v.optional(v.number()),
@@ -407,6 +415,8 @@ export const batchUpsertVoters = mutation({
         v.literal("missing")
       ),
       searchText: v.string(),
+      partNumber: v.optional(v.string()),
+      partSerialNumber: v.optional(v.string()),
       assemblyConstituency: v.string(),
       district: v.string(),
       lat: v.optional(v.number()),
@@ -417,6 +427,13 @@ export const batchUpsertVoters = mutation({
         v.literal("failed")
       ),
       geocodeConfidence: v.number(),
+      status: v.optional(v.union(
+        v.literal("pending"),
+        v.literal("done"),
+        v.literal("locked"),
+        v.literal("revisit"),
+        v.literal("wrong_address")
+      )),
     })),
     importBatchId: v.id("importBatches"),
   },
@@ -442,7 +459,8 @@ export const batchUpsertVoters = mutation({
       }
       
       if (existingVoter) {
-        // Update existing voter, preserve status and visited
+        // Update source fields and apply CSV status when supplied; preserve the
+        // existing status for legacy imports that do not include one.
         await ctx.db.patch(existingVoter._id, {
           ...voterData,
           updatedAt: now,
@@ -453,7 +471,7 @@ export const batchUpsertVoters = mutation({
         // Insert new voter
         await ctx.db.insert("voters", {
           ...voterData,
-          status: "pending",
+          status: voterData.status ?? "pending",
           visited: false,
           statusUpdatedAt: undefined,
           updatedByUserId: undefined,
@@ -469,6 +487,53 @@ export const batchUpsertVoters = mutation({
     }
     
     return results;
+  },
+});
+
+// Apply a complete pending/done snapshot for a part in a bounded transaction.
+export const batchUpdateStatus = mutation({
+  args: {
+    updates: v.array(v.object({
+      voterId: v.id("voters"),
+      status: v.union(
+        v.literal("pending"),
+        v.literal("done"),
+        v.literal("locked"),
+        v.literal("revisit"),
+        v.literal("wrong_address")
+      ),
+    })),
+    userId: v.optional(v.id("appUsers")),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    let updated = 0;
+
+    for (const update of args.updates) {
+      const voter = await ctx.db.get(update.voterId);
+      if (!voter || voter.status === update.status) continue;
+
+      await ctx.db.patch(update.voterId, {
+        status: update.status,
+        statusUpdatedAt: now,
+        statusNote: args.note,
+        updatedByUserId: args.userId,
+        updatedAt: now,
+      });
+
+      await ctx.db.insert("statusEvents", {
+        voterId: update.voterId,
+        fromStatus: voter.status,
+        toStatus: update.status,
+        note: args.note,
+        changedByUserId: args.userId,
+        changedAt: now,
+      });
+      updated++;
+    }
+
+    return { updated };
   },
 });
 
@@ -567,5 +632,21 @@ export const updateAreaClusterMetadataBatch = mutation({
     }
 
     return { updated };
+  },
+});
+
+// Manual area cluster override — skipped by recluster pipeline (source = "manual")
+export const updateAreaCluster = mutation({
+  args: {
+    id: v.id("voters"),
+    areaCluster: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, {
+      areaCluster: args.areaCluster,
+      areaClusterSource: "manual",
+      areaClusterNeedsReview: false,
+      areaClusterSuggested: undefined,
+    });
   },
 });

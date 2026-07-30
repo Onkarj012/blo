@@ -13,9 +13,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-import pytesseract
-from PIL import Image
-from pytesseract import Output
+try:
+    import pytesseract
+    from PIL import Image
+    from pytesseract import Output
+except ModuleNotFoundError:
+    pytesseract = None
+    Image = None
+    Output = None
 
 
 OUTPUT_COLUMNS = [
@@ -143,6 +148,10 @@ def normalize_phone(value: str) -> str:
     if len(digits) < 10:
         return "NA"
 
+    plausible_mobile = re.search(r"(?:91)?([6-9]\d{9})", digits)
+    if plausible_mobile:
+        return f"+91-{plausible_mobile.group(1)}"
+
     if cleaned.startswith("+"):
         return re.sub(r"\s+", "", value)
 
@@ -231,6 +240,9 @@ def detect_label(line: str) -> str | None:
 
 
 def line_groups_from_ocr(image: Image.Image) -> tuple[str, list[str]]:
+    if pytesseract is None or Output is None:
+        raise RuntimeError("pytesseract and Pillow are required for OCR extraction.")
+
     config = "--psm 6"
     raw_text = pytesseract.image_to_string(image, config=config).strip()
     data = pytesseract.image_to_data(image, config=config, output_type=Output.DICT)
@@ -316,10 +328,22 @@ def normalize_address(values: list[str]) -> str:
 
     preferred: list[str] = []
     for value in cleaned_values:
-        uppercase_count = sum(1 for char in value if char.isupper())
-        lowercase_count = sum(1 for char in value if char.islower())
-        has_digits = any(char.isdigit() for char in value)
-        if has_digits or uppercase_count >= lowercase_count:
+        simplified = simplify(value)
+        if not simplified:
+            continue
+        if simplified in SECTION_HEADERS:
+            continue
+        if detect_label(value):
+            continue
+        if re.fullmatch(r"[a-z]?\d+[a-z]?(?:\s*,?\s*[a-z]?\d+[a-z]?)*", simplified):
+            preferred.append(value)
+            continue
+        if re.search(
+            r"\b(society|apartment|apartments|residency|residence|colony|nagar|"
+            r"heights|hights|park|garden|palace|avenue|road|lane|wasti|vasti|"
+            r"pimple|pimpale|saudagar|pune)\b",
+            simplified,
+        ):
             preferred.append(value)
 
     selected_values = preferred or cleaned_values
@@ -382,6 +406,10 @@ def build_row(image_path: Path, raw_text: str, sections: dict[str, list[str]]) -
 
 
 def ensure_tesseract_available() -> None:
+    if pytesseract is None or Image is None:
+        raise SystemExit(
+            "pytesseract and Pillow are not installed. Install them before running OCR extraction."
+        )
     if shutil.which("tesseract"):
         return
     raise SystemExit(
@@ -401,6 +429,9 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> 
 
 
 def process_folder(folder: Path, raw_output_dir: Path, cleaned_output_dir: Path) -> FolderSummary:
+    if Image is None:
+        raise RuntimeError("Pillow is required for OCR extraction.")
+
     images = collect_images(folder)
     rows: list[dict[str, str]] = []
 
