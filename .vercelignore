@@ -1,0 +1,11 @@
+# Local voter datasets and generated artifacts are not needed by the Next.js app.
+data/
+scripts/
+.agents/
+.codex/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.png
+*.jpg
+*.jpeg

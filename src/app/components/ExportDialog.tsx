@@ -148,8 +148,8 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-0">
-        <DialogHeader className="px-6 pt-6 pb-4 border-b">
+      <DialogContent className="w-[95vw] sm:max-w-2xl h-[92dvh] max-h-[92dvh] sm:h-auto sm:max-h-[85vh] p-0 flex flex-col overflow-hidden">
+        <DialogHeader className="px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b shrink-0">
           <DialogTitle className="flex items-center gap-2 text-xl">
             <Download className="size-5" />
             Export Voters
@@ -157,7 +157,7 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
           <p className="text-sm text-muted-foreground mt-1">{voters.length} voters · choose columns and format</p>
         </DialogHeader>
 
-        <div className="px-6 py-5 space-y-7">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-7">
           {/* ── Step 1: Columns ─────────────────────────────────────────── */}
           <section className="space-y-4">
             <StepLabel n={1} title="Columns" />
@@ -165,47 +165,42 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">{selectedColumns.length} of {COLUMN_DEFS.length} selected</span>
               <div className="flex gap-2">
-                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedColumns(COLUMN_DEFS.map(c => c.key))}>All</Button>
-                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedColumns([])}>None</Button>
+                <Button variant="ghost" size="sm" className="h-9 sm:h-7 text-xs" onClick={() => setSelectedColumns(COLUMN_DEFS.map(c => c.key))}>All</Button>
+                <Button variant="ghost" size="sm" className="h-9 sm:h-7 text-xs" onClick={() => setSelectedColumns([])}>None</Button>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2.5 p-4 bg-muted/30 rounded-lg">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-1 sm:gap-y-2.5 p-2 sm:p-4 bg-muted/30 rounded-lg">
               {COLUMN_DEFS.map(col => (
-                <div key={col.key} className="flex items-center gap-2">
-                  <Checkbox
-                    id={`col-${col.key}`}
-                    checked={selectedColumns.includes(col.key)}
-                    onCheckedChange={() =>
-                      setSelectedColumns(prev =>
-                        prev.includes(col.key) ? prev.filter(k => k !== col.key) : [...prev, col.key]
-                      )
-                    }
-                  />
-                  <Label htmlFor={`col-${col.key}`} className="text-sm font-normal cursor-pointer">
-                    {col.label}
-                  </Label>
-                  {col.default && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">Default</Badge>}
-                </div>
+                <CheckRow
+                  key={col.key}
+                  id={`col-${col.key}`}
+                  label={col.label}
+                  checked={selectedColumns.includes(col.key)}
+                  onCheckedChange={() =>
+                    setSelectedColumns(prev =>
+                      prev.includes(col.key) ? prev.filter(k => k !== col.key) : [...prev, col.key]
+                    )
+                  }
+                  badge={col.default ? <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">Default</Badge> : undefined}
+                />
               ))}
             </div>
 
             {/* Blank columns — collapsed until toggled */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label className="text-sm">Add blank columns for notes</Label>
-                <Switch checked={blankEnabled} onCheckedChange={setBlankEnabled} />
-              </div>
+              <SwitchRow label="Add blank columns for notes" checked={blankEnabled} onCheckedChange={setBlankEnabled} />
 
               {blankEnabled && (
                 <div className="pl-2 space-y-4 pt-1">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-1.5">
                       <Label className="text-xs text-muted-foreground">Count</Label>
                       <Input
                         type="number" min={1} max={10}
                         value={blankColumns.count}
                         onChange={e => setBlankColumns(p => ({ ...p, count: Math.max(1, parseInt(e.target.value) || 1) }))}
+                        className="h-11 sm:h-8"
                       />
                     </div>
                     <div className="space-y-1.5">
@@ -214,17 +209,16 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
                         type="number" min={1} max={50}
                         value={blankColumns.widthChars}
                         onChange={e => setBlankColumns(p => ({ ...p, widthChars: Math.max(1, Math.min(50, parseInt(e.target.value) || 15)) }))}
+                        className="h-11 sm:h-8"
                       />
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <Checkbox
-                      id="blank-headers"
-                      checked={blankColumns.headers}
-                      onCheckedChange={v => setBlankColumns(p => ({ ...p, headers: v as boolean }))}
-                    />
-                    <Label htmlFor="blank-headers" className="text-sm font-normal">Label blank columns</Label>
-                  </div>
+                  <CheckRow
+                    id="blank-headers"
+                    label="Label blank columns"
+                    checked={blankColumns.headers}
+                    onCheckedChange={(v) => setBlankColumns(p => ({ ...p, headers: v }))}
+                  />
                   {blankColumns.headers && (
                     <div className="space-y-1.5">
                       <Label className="text-xs text-muted-foreground">Pattern (use {"{n}"} for number)</Label>
@@ -260,7 +254,7 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
           <section className="space-y-4">
             <StepLabel n={2} title="Format & Layout" />
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
               <FormatCard
                 icon={<FileSpreadsheet className="size-5" />}
                 label="CSV"
@@ -287,11 +281,11 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
             {/* Shared layout controls — only when PDF/Grouped */}
             {(format === "pdf" || format === "grouped") && (
               <div className="space-y-4 pt-1">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-xs text-muted-foreground">Page Size</Label>
                     <Select value={pageSize} onValueChange={v => setPageSize(v as typeof pageSize)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="w-full h-11 sm:h-8"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="a4">A4</SelectItem>
                         <SelectItem value="letter">Letter</SelectItem>
@@ -302,7 +296,7 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
                   <div className="space-y-1.5">
                     <Label className="text-xs text-muted-foreground">Orientation</Label>
                     <Select value={orientation} onValueChange={v => setOrientation(v as typeof orientation)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="w-full h-11 sm:h-8"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="portrait">Portrait</SelectItem>
                         <SelectItem value="landscape">Landscape</SelectItem>
@@ -311,18 +305,15 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
                   </div>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-1">
                   <Label className="text-xs text-muted-foreground">Include in PDF</Label>
-                  <div className="flex flex-wrap gap-x-6 gap-y-2">
+                  <div className="flex flex-col sm:flex-row sm:flex-wrap gap-x-6 gap-y-0.5">
                     {[
                       { id: "title", label: "Title", value: includeTitle, set: setIncludeTitle },
                       { id: "ts", label: "Timestamp", value: includeTimestamp, set: setIncludeTimestamp },
                       { id: "fl", label: "Filter summary", value: includeFilters, set: setIncludeFilters },
                     ].map(opt => (
-                      <div key={opt.id} className="flex items-center gap-2">
-                        <Checkbox id={opt.id} checked={opt.value} onCheckedChange={v => opt.set(v as boolean)} />
-                        <Label htmlFor={opt.id} className="text-sm font-normal">{opt.label}</Label>
-                      </div>
+                      <CheckRow key={opt.id} id={opt.id} label={opt.label} checked={opt.value} onCheckedChange={opt.set} />
                     ))}
                   </div>
                 </div>
@@ -332,11 +323,11 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
                   <div className="space-y-3 pt-1">
                     <Separator />
                     <Label className="text-xs text-muted-foreground">Grouping Options</Label>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <Label className="text-xs text-muted-foreground">Sort areas by</Label>
                         <Select value={sortGroupsBy} onValueChange={v => setSortGroupsBy(v as typeof sortGroupsBy)}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectTrigger className="w-full h-11 sm:h-8"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="alphabetical">Alphabetical</SelectItem>
                             <SelectItem value="count">Voter Count</SelectItem>
@@ -346,7 +337,7 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
                       <div className="space-y-1.5">
                         <Label className="text-xs text-muted-foreground">Direction</Label>
                         <Select value={sortDir} onValueChange={v => setSortDir(v as typeof sortDir)}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectTrigger className="w-full h-11 sm:h-8"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="asc">Ascending</SelectItem>
                             <SelectItem value="desc">Descending</SelectItem>
@@ -354,16 +345,13 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
                         </Select>
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-x-6 gap-y-2">
+                    <div className="flex flex-col sm:flex-row sm:flex-wrap gap-x-6 gap-y-0.5">
                       {[
                         { id: "nppg", label: "New page per area", value: newPagePerGroup, set: setNewPagePerGroup },
                         { id: "gh", label: "Area headers", value: includeGroupHeader, set: setIncludeGroupHeader },
                         { id: "sp", label: "Summary page", value: includeSummaryPage, set: setIncludeSummaryPage },
                       ].map(opt => (
-                        <div key={opt.id} className="flex items-center gap-2">
-                          <Checkbox id={opt.id} checked={opt.value} onCheckedChange={v => opt.set(v as boolean)} />
-                          <Label htmlFor={opt.id} className="text-sm font-normal">{opt.label}</Label>
-                        </div>
+                        <CheckRow key={opt.id} id={opt.id} label={opt.label} checked={opt.value} onCheckedChange={opt.set} />
                       ))}
                     </div>
                   </div>
@@ -374,28 +362,29 @@ export function ExportDialog({ open, onOpenChange, voters, filterLabels }: Expor
 
           <Separator />
 
-          {/* ── Step 3: Review & Export ─────────────────────────────────── */}
+          {/* ── Step 3: Review ──────────────────────────────────────────── */}
           <section className="space-y-4">
             <StepLabel n={3} title="Review & Export" />
 
             <div className="rounded-lg bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
               {summary}
             </div>
-
-            <div className="flex gap-3 pt-1">
-              <Button variant="ghost" onClick={() => onOpenChange(false)} className="flex-1">
-                Cancel
-              </Button>
-              <Button
-                onClick={handleExport}
-                disabled={isExporting || (selectedColumns.length === 0 && effectiveBlank.count === 0)}
-                className="flex-1 gap-2"
-              >
-                <Download className="size-4" />
-                {isExporting ? "Exporting…" : "Export"}
-              </Button>
-            </div>
           </section>
+        </div>
+
+        {/* Sticky footer — actions always reachable */}
+        <div className="shrink-0 border-t bg-popover px-4 sm:px-6 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] flex gap-3">
+          <Button variant="ghost" onClick={() => onOpenChange(false)} className="flex-1 h-11 sm:h-8">
+            Cancel
+          </Button>
+          <Button
+            onClick={handleExport}
+            disabled={isExporting || (selectedColumns.length === 0 && effectiveBlank.count === 0)}
+            className="flex-1 h-11 sm:h-8 gap-2"
+          >
+            <Download className="size-4" />
+            {isExporting ? "Exporting…" : "Export"}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -425,7 +414,7 @@ function FormatCard({
   return (
     <button
       onClick={onClick}
-      className={`flex flex-col items-center gap-2 rounded-xl border-2 p-4 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+      className={`flex min-h-11 flex-col items-center justify-center gap-1.5 rounded-xl border-2 p-2 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:gap-2 sm:p-4 ${
         selected
           ? "border-primary bg-primary/8"
           : "border-border hover:border-primary/50 hover:bg-muted/40"
@@ -433,9 +422,58 @@ function FormatCard({
     >
       <div className={selected ? "text-primary" : "text-muted-foreground"}>{icon}</div>
       <div>
-        <p className="text-sm font-semibold">{label}</p>
-        <p className="text-xs text-muted-foreground">{description}</p>
+        <p className="text-xs font-semibold sm:text-sm">{label}</p>
+        <p className="hidden text-xs text-muted-foreground sm:block">{description}</p>
       </div>
     </button>
+  )
+}
+
+function CheckRow({
+  id, label, checked, onCheckedChange, badge,
+}: {
+  id: string
+  label: string
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+  badge?: React.ReactNode
+}) {
+  return (
+    <div
+      className="-mx-1 flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-1 py-1.5 select-none hover:bg-muted/40 sm:min-h-0"
+      onClick={() => onCheckedChange(!checked)}
+    >
+      <span onClick={e => e.stopPropagation()} className="flex items-center">
+        <Checkbox
+          id={id}
+          checked={checked}
+          onCheckedChange={v => onCheckedChange(v as boolean)}
+        />
+      </span>
+      <Label htmlFor={id} className="flex-1 text-sm font-normal">
+        {label}
+      </Label>
+      {badge}
+    </div>
+  )
+}
+
+function SwitchRow({
+  label, checked, onCheckedChange,
+}: {
+  label: string
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+}) {
+  return (
+    <div
+      className="flex min-h-11 cursor-pointer items-center justify-between gap-2 select-none sm:min-h-0"
+      onClick={() => onCheckedChange(!checked)}
+    >
+      <Label className="text-sm">{label}</Label>
+      <span onClick={e => e.stopPropagation()} className="flex items-center">
+        <Switch checked={checked} onCheckedChange={onCheckedChange} />
+      </span>
+    </div>
   )
 }

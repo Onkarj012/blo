@@ -20,6 +20,8 @@ export interface ExportVoter {
   relativeName?: string
   relativeType?: string
   epicNumber?: string
+  partNumber?: string
+  partSerialNumber?: string
   distance?: number
 }
 
@@ -74,6 +76,8 @@ export const COLUMN_DEFS: ColumnDef[] = [
   { key: "relativeName", label: "Relative Name",  getValue: v => v.relativeName ?? "",     default: false },
   { key: "relativeType", label: "Relative Type",  getValue: v => v.relativeType ?? "",     default: false },
   { key: "epicNumber",   label: "EPIC Number",    getValue: v => v.epicNumber ?? "",        default: false },
+  { key: "partNumber", label: "Part No.", getValue: v => v.partNumber ?? "", default: true },
+  { key: "partSerialNumber", label: "Part Serial No.", getValue: v => v.partSerialNumber ?? "", default: true },
   { key: "distance",     label: "Distance (km)",  getValue: v => v.distance !== undefined ? v.distance.toFixed(2) : "", default: false },
 ]
 
@@ -327,7 +331,7 @@ export function downloadGroupedPDF(voters: ExportVoter[], opts: PDFOptions, file
 /** Quick single-area CSV — used by area headers in the dashboard */
 export function downloadAreaCSV(areaName: string, voters: ExportVoter[]) {
   const opts: CSVOptions = {
-    selectedColumns: ["name", "phoneNumber", "displayAddress", "status", "age", "gender"],
+    selectedColumns: ["name", "phoneNumber", "displayAddress", "status", "partNumber", "partSerialNumber", "age", "gender"],
     blankColumns: { count: 0, headers: false, pattern: "Notes {n}", widthChars: 15 },
   }
   const safe = areaName.replace(/[^a-zA-Z0-9]/g, "_")
@@ -337,7 +341,7 @@ export function downloadAreaCSV(areaName: string, voters: ExportVoter[]) {
 /** Quick single-area PDF — used by area headers in the dashboard */
 export function downloadAreaPDF(areaName: string, voters: ExportVoter[]) {
   const opts: PDFOptions = {
-    selectedColumns: ["name", "phoneNumber", "displayAddress", "status", "age"],
+    selectedColumns: ["name", "phoneNumber", "displayAddress", "status", "partNumber", "partSerialNumber", "age"],
     blankColumns: { count: 0, headers: false, pattern: "Notes {n}", widthChars: 15 },
     pageSize: "a4",
     orientation: "portrait",

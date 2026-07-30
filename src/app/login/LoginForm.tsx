@@ -45,7 +45,7 @@ export function LoginForm() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
+    <div className="min-h-dvh flex items-center justify-center bg-background p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">
@@ -72,6 +72,7 @@ export function LoginForm() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
+                className="h-11"
               />
             </div>
 
@@ -84,12 +85,13 @@ export function LoginForm() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                className="h-11"
               />
             </div>
 
-            <Button 
-              type="submit" 
-              className="w-full" 
+            <Button
+              type="submit"
+              className="w-full h-11"
               disabled={loading}
             >
               {loading ? (

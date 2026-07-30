@@ -138,6 +138,7 @@
     font-size: 16px;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
   }
   body {
     @apply bg-background text-foreground;
@@ -145,6 +146,7 @@
     font-size: 1rem;
     line-height: 1.6;
     letter-spacing: 0.01em;
+    overflow-x: hidden;
   }
   /* Tabular numerics use mono */
   .tabular-nums {

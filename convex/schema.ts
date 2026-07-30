@@ -40,6 +40,8 @@ export default defineSchema({
     searchText: v.string(),
     
     // Administrative
+    partNumber: v.optional(v.string()),
+    partSerialNumber: v.optional(v.string()),
     assemblyConstituency: v.string(),
     district: v.string(),
     

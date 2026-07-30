@@ -1,12 +1,13 @@
 "use client"
 
-import { useState, useMemo, useEffect, useCallback, memo, useRef } from "react"
+import { useState, useMemo, useEffect, useLayoutEffect, useCallback, memo, useRef, useSyncExternalStore } from "react"
 import {
   MapPin, List, Filter, Search, User, Phone, MapPinned,
   CheckCircle2, Clock, RotateCcw, AlertCircle, X, ChevronDown,
   LogOut, Upload, Navigation, Sun, Moon, Download, ChevronUp,
   MoreHorizontal, FileSpreadsheet, FileText, Edit2, AlertTriangle,
 } from "lucide-react"
+import { List as VirtualList, useDynamicRowHeight, type RowComponentProps } from "react-window"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -15,14 +16,14 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import dynamic from "next/dynamic"
@@ -66,6 +67,8 @@ interface Voter {
   relativeName?: string
   relativeType?: string
   epicNumber?: string
+  partNumber?: string
+  partSerialNumber?: string
   distance?: number
   lat?: number
   lng?: number
@@ -135,6 +138,57 @@ const statusConfig: Record<VoterStatus, { label: string; variant: "default" | "s
   wrong_address: { label: "Wrong Address", variant: "destructive", icon: <AlertCircle className="size-3" /> },
 }
 
+// ── Layout measurement helper ────────────────────────────────────────────────
+// Measures the live top offset (viewport px) of a scroll container so its
+// height can be derived from the *actual* rendered layout above it, instead
+// of a guessed fixed rem value. Combined with `dvh` this keeps exactly one
+// scroll region on mobile: the list/map fills to the real bottom of the
+// viewport instead of over- or under-shooting it.
+
+const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect
+
+function useMeasuredTop<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null)
+  const [top, setTop] = useState(0)
+
+  // Re-measure after every commit so layout changes above the container
+  // (header wrapping, stats collapsing, filter bar height, etc.) are picked
+  // up immediately.
+  useIsomorphicLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    setTop(prev => (Math.abs(prev - rect.top) > 0.5 ? rect.top : prev))
+  })
+
+  // Also react to things that don't trigger a React re-render.
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const measure = () => {
+      const rect = el.getBoundingClientRect()
+      setTop(prev => (Math.abs(prev - rect.top) > 0.5 ? rect.top : prev))
+    }
+    const ro = new ResizeObserver(measure)
+    ro.observe(document.body)
+    window.addEventListener("resize", measure)
+    window.addEventListener("orientationchange", measure)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener("resize", measure)
+      window.removeEventListener("orientationchange", measure)
+    }
+  }, [])
+
+  return [ref, top] as const
+}
+
+// Fills from the measured top offset down to the real viewport bottom,
+// leaving room for the page's own bottom padding + iOS safe area.
+function fillHeightStyle(top: number, minPx = 240): React.CSSProperties {
+  return { height: `max(${minPx}px, calc(100dvh - ${top}px - 1rem - env(safe-area-inset-bottom)))` }
+}
+
 // ── StatCard ───────────────────────────────────────────────────────────────────
 
 function StatCard({ title, count, icon, variant = "default" }: {
@@ -148,14 +202,12 @@ function StatCard({ title, count, icon, variant = "default" }: {
     outline: "bg-muted text-muted-foreground",
   }
   return (
-    <Card className="flex-none min-w-[148px] sm:flex-1 sm:min-w-0 hover:shadow-md transition-shadow glass-surface">
-      <CardContent className="flex items-center justify-between p-4 sm:p-5">
-        <div className="flex items-center gap-4">
-          <div className={`rounded-xl p-3 ${styles[variant]}`}>{icon}</div>
-          <div>
-            <p className="text-sm font-medium text-muted-foreground mb-1">{title}</p>
-            <p className="text-3xl font-bold tracking-tight tabular-nums">{count}</p>
-          </div>
+    <Card className="hover:shadow-md transition-shadow glass-surface">
+      <CardContent className="flex items-center gap-2.5 p-3 sm:gap-4 sm:p-5">
+        <div className={`shrink-0 rounded-xl p-2 sm:p-3 ${styles[variant]}`}>{icon}</div>
+        <div className="min-w-0">
+          <p className="truncate text-xs font-medium text-muted-foreground sm:mb-1 sm:text-sm">{title}</p>
+          <p className="text-xl font-bold tracking-tight tabular-nums sm:text-3xl">{count}</p>
         </div>
       </CardContent>
     </Card>
@@ -191,7 +243,7 @@ function VoterCardSkeleton() {
         </div>
       </CardHeader>
       <CardContent className="pb-3">
-        <div className="grid grid-cols-2 gap-2 text-sm">
+        <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-4 w-full" />)}
         </div>
       </CardContent>
@@ -213,43 +265,48 @@ const VoterRow = memo(({ voter, onUpdateStatus }: {
   const needsReview = voter.areaClusterNeedsReview || voter.areaCluster.startsWith("Uncertain:")
 
   return (
-    <div className="flex items-center gap-3 px-3 py-2.5 border rounded-lg hover:bg-muted/30 transition-colors border-l-4 border-l-transparent hover:border-l-primary">
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="font-medium text-sm">{voter.name}</span>
-          {needsReview && <AlertTriangle className="size-3 text-amber-500 shrink-0" />}
-          <Badge variant={status.variant} className="gap-1 px-1.5 py-0 text-[10px] shrink-0">
+    <div className="flex items-start gap-2 rounded-lg border border-l-4 border-l-transparent px-3 py-2.5 transition-colors hover:border-l-primary hover:bg-muted/30 sm:items-center sm:gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+          <span className="max-w-[60vw] truncate font-medium text-sm sm:max-w-none">{voter.name}</span>
+          {needsReview && <AlertTriangle className="size-3 shrink-0 text-amber-500" />}
+          <Badge variant={status.variant} className="shrink-0 gap-1 px-1.5 py-0 text-[10px]">
             {status.icon} {status.label}
           </Badge>
         </div>
-        <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground">
-          <span className="truncate max-w-[160px] sm:max-w-xs">{voter.areaCluster}</span>
-          <span className="shrink-0">·</span>
-          <span className="shrink-0">{voter.age}y</span>
-          <span className="shrink-0 capitalize">{voter.gender.charAt(0).toUpperCase()}</span>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+          <span className="max-w-[55vw] truncate sm:max-w-xs">{voter.areaCluster}</span>
+          {voter.partNumber && (
+            <span className="hidden shrink-0 sm:inline">
+              · Part {voter.partNumber}{voter.partSerialNumber ? ` / ${voter.partSerialNumber}` : ""}
+            </span>
+          )}
+          <span className="shrink-0">· {voter.age}y</span>
+          <span className="hidden shrink-0 capitalize sm:inline">{voter.gender.charAt(0).toUpperCase()}</span>
           {voter.phoneNumber && (
-            <>
-              <span className="shrink-0">·</span>
-              <span className="shrink-0 font-mono">{voter.phoneNumber}</span>
-            </>
+            <span className="hidden shrink-0 font-mono sm:inline">· {voter.phoneNumber}</span>
           )}
         </div>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
+      <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
         {voter.phoneNumber && (
           <a href={`tel:${voter.phoneNumber}`}>
-            <Button variant="ghost" size="icon" className="size-7"><Phone className="size-3.5" /></Button>
+            <Button variant="ghost" size="icon" className="size-11 touch-manipulation sm:size-7">
+              <Phone className="size-4 sm:size-3.5" />
+            </Button>
           </a>
         )}
         <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(voter.displayAddress)}`} target="_blank" rel="noopener noreferrer">
-          <Button variant="ghost" size="icon" className="size-7"><Navigation className="size-3.5" /></Button>
+          <Button variant="ghost" size="icon" className="size-11 touch-manipulation sm:size-7">
+            <Navigation className="size-4 sm:size-3.5" />
+          </Button>
         </a>
         {voter.status !== "done" ? (
-          <Button size="sm" className="h-7 text-xs px-2.5" onClick={() => onUpdateStatus?.(voter._id, "done")}>
+          <Button size="sm" className="h-11 touch-manipulation px-3 text-xs sm:h-7 sm:px-2.5" onClick={() => onUpdateStatus?.(voter._id, "done")}>
             Done
           </Button>
         ) : (
-          <span className="text-xs font-medium text-primary flex items-center gap-1 px-1">
+          <span className="flex items-center gap-1 px-1 text-xs font-medium text-primary">
             <CheckCircle2 className="size-3.5" />Done
           </span>
         )}
@@ -260,6 +317,32 @@ const VoterRow = memo(({ voter, onUpdateStatus }: {
 VoterRow.displayName = "VoterRow"
 
 // ── VirtualizedVoterList ───────────────────────────────────────────────────────
+// Real (measured) row heights: each row's actual rendered height is observed
+// via ResizeObserver (through react-window's dynamic row-height cache) and
+// used to position subsequent rows. The compact/detail constants below are
+// only the *initial estimate* for not-yet-measured rows — real content can be
+// (and at phone widths, will be) taller than that estimate.
+
+interface VoterRowData {
+  voters: Voter[]
+  onUpdateStatus?: (id: string, s: VoterStatus) => void
+  onUpdateArea?: (id: string, area: string) => void
+  areaNames: string[]
+  detailView: boolean
+}
+
+function VirtualRow({ index, style, voters, onUpdateStatus, onUpdateArea, areaNames, detailView }: RowComponentProps<VoterRowData>) {
+  const voter = voters[index]
+  if (!voter) return null
+  return (
+    <div style={style} className="px-0.5 pb-2">
+      {detailView
+        ? <VoterCard voter={voter} onUpdateStatus={onUpdateStatus} onUpdateArea={onUpdateArea} areaNames={areaNames} />
+        : <VoterRow voter={voter} onUpdateStatus={onUpdateStatus} />
+      }
+    </div>
+  )
+}
 
 function VirtualizedVoterList({ voters, onUpdateStatus, onUpdateArea, areaNames, detailView }: {
   voters: Voter[]
@@ -268,42 +351,27 @@ function VirtualizedVoterList({ voters, onUpdateStatus, onUpdateArea, areaNames,
   areaNames: string[]
   detailView: boolean
 }) {
-  const ITEM_HEIGHT = detailView ? 300 : 65
-  const OVERSCAN = 5
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 })
-
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const update = () => {
-      const top = el.scrollTop
-      const h = el.clientHeight
-      const start = Math.max(0, Math.floor(top / ITEM_HEIGHT) - OVERSCAN)
-      const end = Math.min(voters.length, Math.ceil((top + h) / ITEM_HEIGHT) + OVERSCAN)
-      setVisibleRange({ start, end })
-    }
-    update()
-    el.addEventListener("scroll", update)
-    window.addEventListener("resize", update)
-    return () => { el.removeEventListener("scroll", update); window.removeEventListener("resize", update) }
-  }, [voters.length])
-
-  const totalHeight = voters.length * ITEM_HEIGHT
-  const visible = voters.slice(visibleRange.start, visibleRange.end)
+  const [containerRef, top] = useMeasuredTop<HTMLDivElement>()
+  const rowHeight = useDynamicRowHeight({
+    defaultRowHeight: detailView ? 340 : 76,
+    key: detailView ? "detail" : "compact",
+  })
+  const rowProps = useMemo<VoterRowData>(
+    () => ({ voters, onUpdateStatus, onUpdateArea, areaNames, detailView }),
+    [voters, onUpdateStatus, onUpdateArea, areaNames, detailView]
+  )
 
   return (
-    <div ref={containerRef} className="relative overflow-auto" style={{ height: "calc(100dvh - 18rem)" }}>
-      <div style={{ height: totalHeight, position: "relative" }}>
-        {visible.map((voter, i) => (
-          <div key={voter._id} style={{ position: "absolute", top: (visibleRange.start + i) * ITEM_HEIGHT, left: 0, right: 0, paddingBottom: "8px" }}>
-            {detailView
-              ? <VoterCard voter={voter} onUpdateStatus={onUpdateStatus} onUpdateArea={onUpdateArea} areaNames={areaNames} />
-              : <VoterRow voter={voter} onUpdateStatus={onUpdateStatus} />
-            }
-          </div>
-        ))}
-      </div>
+    <div ref={containerRef} style={fillHeightStyle(top)} className="overscroll-contain">
+      <VirtualList
+        rowComponent={VirtualRow}
+        rowCount={voters.length}
+        rowHeight={rowHeight}
+        rowProps={rowProps}
+        overscanCount={6}
+        className="soft-scroll"
+        style={{ height: "100%" }}
+      />
     </div>
   )
 }
@@ -317,6 +385,7 @@ function GroupedVoterList({ voters, onUpdateStatus, onUpdateArea, areaNames, det
   areaNames: string[]
   detailView: boolean
 }) {
+  const [containerRef, top] = useMeasuredTop<HTMLDivElement>()
   const groups = useMemo(() => {
     const map = new Map<string, Voter[]>()
     voters.forEach(v => {
@@ -332,7 +401,11 @@ function GroupedVoterList({ voters, onUpdateStatus, onUpdateArea, areaNames, det
     setExpanded(prev => { const s = new Set(prev); s.has(name) ? s.delete(name) : s.add(name); return s })
 
   return (
-    <div className="overflow-auto space-y-3" style={{ height: "calc(100dvh - 18rem)" }}>
+    <div
+      ref={containerRef}
+      style={fillHeightStyle(top)}
+      className="soft-scroll overflow-auto overscroll-contain space-y-3"
+    >
       {groups.map(([area, areaVoters]) => {
         const isOpen = expanded.has(area)
         const pending = areaVoters.filter(v => v.status === "pending").length
@@ -342,12 +415,12 @@ function GroupedVoterList({ voters, onUpdateStatus, onUpdateArea, areaNames, det
         return (
           <div key={area} className="rounded-xl border overflow-hidden">
             <div className="flex items-center justify-between p-3.5 hover:bg-muted/50 transition-colors">
-              <button onClick={() => toggle(area)} className="flex items-center gap-3 flex-1 text-left">
+              <button onClick={() => toggle(area)} className="flex flex-1 items-center gap-3 py-1 text-left touch-manipulation">
                 <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary font-semibold text-sm tabular-nums shrink-0">
                   {areaVoters.length}
                 </div>
-                <div>
-                  <p className="font-semibold">{area}</p>
+                <div className="min-w-0">
+                  <p className="truncate font-semibold">{area}</p>
                   <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
                     <span className="flex items-center gap-1"><Clock className="size-3" />{pending}</span>
                     <span className="flex items-center gap-1"><CheckCircle2 className="size-3" />{done}</span>
@@ -355,9 +428,9 @@ function GroupedVoterList({ voters, onUpdateStatus, onUpdateArea, areaNames, det
                   </div>
                 </div>
               </button>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-0.5">
                 <DropdownMenu>
-                  <DropdownMenuTrigger className="inline-flex items-center justify-center size-8 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors">
+                  <DropdownMenuTrigger className="inline-flex size-11 items-center justify-center rounded-md touch-manipulation hover:bg-accent hover:text-accent-foreground transition-colors sm:size-8">
                     <MoreHorizontal className="size-4" />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
@@ -369,7 +442,7 @@ function GroupedVoterList({ voters, onUpdateStatus, onUpdateArea, areaNames, det
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <button onClick={() => toggle(area)} className="p-1 hover:bg-muted rounded">
+                <button onClick={() => toggle(area)} className="flex size-11 items-center justify-center rounded touch-manipulation hover:bg-muted sm:size-8">
                   {isOpen ? <ChevronUp className="size-4 text-muted-foreground" /> : <ChevronDown className="size-4 text-muted-foreground" />}
                 </button>
               </div>
@@ -426,13 +499,16 @@ const VoterCard = memo(({ voter, onUpdateStatus, onUpdateArea, areaNames }: {
       </CardHeader>
 
       <CardContent className="pb-4">
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-sm">
+        <div className="grid grid-cols-1 gap-x-4 gap-y-2.5 text-sm sm:grid-cols-2">
           <div className="flex items-center gap-2">
             <span className="text-muted-foreground font-medium min-w-[40px]">Area:</span>
             <span className="text-foreground truncate">{voter.areaCluster}</span>
             {onUpdateArea && (
               <Popover open={areaOpen} onOpenChange={setAreaOpen}>
-                <PopoverTrigger className="ml-1 p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors" title="Reassign area">
+                <PopoverTrigger
+                  className="ml-1 rounded p-2.5 text-muted-foreground transition-colors touch-manipulation hover:bg-muted hover:text-foreground sm:p-0.5"
+                  title="Reassign area"
+                >
                   <Edit2 className="size-3" />
                 </PopoverTrigger>
                 <PopoverContent className="w-56 p-0" align="start">
@@ -440,6 +516,20 @@ const VoterCard = memo(({ voter, onUpdateStatus, onUpdateArea, areaNames }: {
                     <CommandInput placeholder="Search areas…" value={areaSearch} onValueChange={setAreaSearch} />
                     <CommandList>
                       <CommandEmpty>No area found.</CommandEmpty>
+                      {areaSearch.trim() && !areaNames.some((area) => area.toLowerCase() === areaSearch.trim().toLowerCase()) && (
+                        <CommandGroup heading="New area">
+                          <CommandItem
+                            value={`new-${areaSearch.trim()}`}
+                            onSelect={() => {
+                              onUpdateArea(voter._id, areaSearch.trim())
+                              setAreaOpen(false)
+                              setAreaSearch("")
+                            }}
+                          >
+                            Use “{areaSearch.trim()}”
+                          </CommandItem>
+                        </CommandGroup>
+                      )}
                       <CommandGroup>
                         {filteredAreas.slice(0, 30).map(area => (
                           <CommandItem
@@ -476,13 +566,13 @@ const VoterCard = memo(({ voter, onUpdateStatus, onUpdateArea, areaNames }: {
             </div>
           )}
           {voter.relativeName && (
-            <div className="col-span-2 flex items-center gap-2">
+            <div className="col-span-1 flex items-center gap-2 sm:col-span-2">
               <span className="text-muted-foreground font-medium min-w-[80px]">{voter.relativeType}:</span>
               <span className="text-foreground">{voter.relativeName}</span>
             </div>
           )}
           {voter.distance !== undefined && (
-            <div className="col-span-2 flex items-center gap-2 text-xs">
+            <div className="col-span-1 flex items-center gap-2 text-xs sm:col-span-2">
               <span className="text-muted-foreground font-medium">Distance:</span>
               <span className="text-muted-foreground tabular-nums">{voter.distance.toFixed(2)} km</span>
             </div>
@@ -491,13 +581,13 @@ const VoterCard = memo(({ voter, onUpdateStatus, onUpdateArea, areaNames }: {
 
         {/* Apply suggestion */}
         {voter.areaClusterSuggested && voter.areaClusterSuggested !== voter.areaCluster && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-sm">
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-sm">
             <AlertTriangle className="size-3.5 text-amber-500 shrink-0" />
             <span className="text-muted-foreground">Suggested: <strong className="text-foreground">{voter.areaClusterSuggested}</strong></span>
             <Button
               variant="outline"
               size="sm"
-              className="ml-auto h-7 text-xs px-2"
+              className="ml-auto h-9 touch-manipulation px-2 text-xs sm:h-7"
               onClick={() => onUpdateArea?.(voter._id, voter.areaClusterSuggested!)}
             >
               Apply
@@ -507,36 +597,36 @@ const VoterCard = memo(({ voter, onUpdateStatus, onUpdateArea, areaNames }: {
       </CardContent>
 
       <CardFooter className="flex flex-col gap-2 pt-0 pb-4 px-4">
-        <div className="flex w-full gap-2">
+        <div className="flex w-full flex-wrap gap-2">
           {voter.status !== "done" ? (
-            <Button size="sm" className="flex-1 h-10" onClick={() => onUpdateStatus?.(voter._id, "done")}>
+            <Button size="sm" className="h-11 min-w-[140px] flex-1 touch-manipulation" onClick={() => onUpdateStatus?.(voter._id, "done")}>
               <CheckCircle2 className="mr-1.5 size-4" />Mark Done
             </Button>
           ) : (
-            <div className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-primary/10 px-3 h-10 text-sm font-medium text-primary">
+            <div className="flex h-11 flex-1 min-w-[140px] items-center justify-center gap-1.5 rounded-md bg-primary/10 px-3 text-sm font-medium text-primary">
               <CheckCircle2 className="size-4" />Done
             </div>
           )}
           {voter.phoneNumber && (
             <a href={`tel:${voter.phoneNumber}`}>
-              <Button variant="outline" size="icon" className="size-10 shrink-0"><Phone className="size-4" /></Button>
+              <Button variant="outline" size="icon" className="size-11 shrink-0 touch-manipulation"><Phone className="size-4" /></Button>
             </a>
           )}
           <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(voter.displayAddress)}`} target="_blank" rel="noopener noreferrer">
-            <Button variant="outline" size="icon" className="size-10 shrink-0"><Navigation className="size-4" /></Button>
+            <Button variant="outline" size="icon" className="size-11 shrink-0 touch-manipulation"><Navigation className="size-4" /></Button>
           </a>
         </div>
-        <div className="flex w-full gap-1.5">
+        <div className="flex w-full flex-wrap gap-1.5">
           {voter.status !== "pending" && (
-            <Button variant="outline" size="sm" className="flex-1 h-9 text-xs px-2" onClick={() => onUpdateStatus?.(voter._id, "pending")}>Pending</Button>
+            <Button variant="outline" size="sm" className="h-11 min-w-[100px] flex-1 touch-manipulation text-sm sm:h-9 sm:text-xs sm:px-2" onClick={() => onUpdateStatus?.(voter._id, "pending")}>Pending</Button>
           )}
           {voter.status !== "revisit" && (
-            <Button variant="secondary" size="sm" className="flex-1 h-9 text-xs px-2" onClick={() => onUpdateStatus?.(voter._id, "revisit")}>Revisit</Button>
+            <Button variant="secondary" size="sm" className="h-11 min-w-[100px] flex-1 touch-manipulation text-sm sm:h-9 sm:text-xs sm:px-2" onClick={() => onUpdateStatus?.(voter._id, "revisit")}>Revisit</Button>
           )}
           <Button
             variant={voter.visited ? "default" : "outline"}
             size="sm"
-            className="flex-1 h-9 text-xs px-2"
+            className="h-11 min-w-[100px] flex-1 touch-manipulation text-sm sm:h-9 sm:text-xs sm:px-2"
             onClick={() => onUpdateStatus?.(voter._id, voter.status)}
           >
             {voter.visited ? "Unvisit" : "Visit"}
@@ -565,8 +655,8 @@ function AreaPanel({ clusters, selectedAreas, onToggle, onSelectAll, onClearAll 
       <div className="flex items-center justify-between">
         <Label className="font-semibold">Areas</Label>
         <div className="flex gap-1">
-          <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={onSelectAll}>All</Button>
-          <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={onClearAll}>Clear</Button>
+          <Button variant="ghost" size="sm" className="h-9 touch-manipulation px-2.5 text-xs sm:h-6 sm:px-2" onClick={onSelectAll}>All</Button>
+          <Button variant="ghost" size="sm" className="h-9 touch-manipulation px-2.5 text-xs sm:h-6 sm:px-2" onClick={onClearAll}>Clear</Button>
         </div>
       </div>
       <div className="relative">
@@ -585,7 +675,7 @@ function AreaPanel({ clusters, selectedAreas, onToggle, onSelectAll, onClearAll 
             return (
               <label
                 key={cluster.name}
-                className="flex items-center gap-2.5 rounded-md px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors"
+                className="flex items-center gap-2.5 rounded-md px-2 py-2 cursor-pointer touch-manipulation hover:bg-muted/50 transition-colors sm:py-1.5"
               >
                 <Checkbox
                   checked={selectedAreas.has(cluster.name)}
@@ -614,15 +704,173 @@ function AreaPanel({ clusters, selectedAreas, onToggle, onSelectAll, onClearAll 
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => { setMounted(true) }, [])
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  )
 
-  if (!mounted) return <Button variant="ghost" size="icon" className="size-8"><Sun className="size-4" /></Button>
+  if (!mounted) return <Button variant="ghost" size="icon" className="size-11 touch-manipulation sm:size-8"><Sun className="size-4" /></Button>
 
   return (
-    <Button variant="ghost" size="icon" className="size-8" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+    <Button variant="ghost" size="icon" className="size-11 touch-manipulation sm:size-8" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
       {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
     </Button>
+  )
+}
+
+// ── FilterPanel ────────────────────────────────────────────────────────────────
+// Hoisted out of FieldDashboard's render body: previously this was defined as
+// a component *inside* the render function, so React saw a new component
+// type on every render and remounted it — dropping input focus and any local
+// state every keystroke. As a real top-level component its identity is
+// stable across renders.
+
+function FilterPanel({
+  clusterSummary, selectedAreas, onToggleArea, onSelectAllAreas, onClearAllAreas,
+  filters, onUpdateFilter, hasActiveFilters, onClearFilters,
+}: {
+  clusterSummary: ClusterSummary[]
+  selectedAreas: Set<string>
+  onToggleArea: (area: string) => void
+  onSelectAllAreas: () => void
+  onClearAllAreas: () => void
+  filters: Filters
+  onUpdateFilter: <K extends keyof Filters>(key: K, value: Filters[K]) => void
+  hasActiveFilters: boolean
+  onClearFilters: () => void
+}) {
+  return (
+    <div className="space-y-4">
+      {/* Area checklist */}
+      {clusterSummary.length > 0 && (
+        <>
+          <AreaPanel
+            clusters={clusterSummary}
+            selectedAreas={selectedAreas}
+            onToggle={onToggleArea}
+            onSelectAll={onSelectAllAreas}
+            onClearAll={onClearAllAreas}
+          />
+          <Separator />
+        </>
+      )}
+
+      {/* Text search filters */}
+      <div className="space-y-2">
+        <Label>Name</Label>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+          <Input placeholder="Enter voter name…" value={filters.name} onChange={e => onUpdateFilter("name", e.target.value)} className="pl-9" />
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label>Phone</Label>
+        <div className="relative">
+          <Phone className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+          <Input placeholder="Search by phone…" value={filters.phone} onChange={e => onUpdateFilter("phone", e.target.value)} className="pl-9" />
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label>Address</Label>
+        <div className="relative">
+          <MapPinned className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+          <Input placeholder="Search by address…" value={filters.address} onChange={e => onUpdateFilter("address", e.target.value)} className="pl-9" />
+        </div>
+      </div>
+
+      <Separator />
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Status</Label>
+          <Select value={filters.status} onValueChange={v => onUpdateFilter("status", v as Filters["status"])}>
+            <SelectTrigger><SelectValue placeholder="All Status" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="done">Done</SelectItem>
+              <SelectItem value="locked">Locked</SelectItem>
+              <SelectItem value="revisit">Revisit</SelectItem>
+              <SelectItem value="wrong_address">Wrong Address</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Visited</Label>
+          <Select value={filters.visited} onValueChange={v => onUpdateFilter("visited", v as VisitedFilter)}>
+            <SelectTrigger><SelectValue placeholder="All" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="visited">Visited</SelectItem>
+              <SelectItem value="unvisited">Unvisited</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label>Gender</Label>
+        <Select value={filters.gender || ""} onValueChange={v => onUpdateFilter("gender", v ?? "")}>
+          <SelectTrigger><SelectValue placeholder="All Genders" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All Genders</SelectItem>
+            <SelectItem value="male">Male</SelectItem>
+            <SelectItem value="female">Female</SelectItem>
+            <SelectItem value="other">Other</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>Min Age</Label>
+          <Input type="number" placeholder="Min" value={filters.minAge} onChange={e => onUpdateFilter("minAge", e.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <Label>Max Age</Label>
+          <Input type="number" placeholder="Max" value={filters.maxAge} onChange={e => onUpdateFilter("maxAge", e.target.value)} />
+        </div>
+      </div>
+
+      <Separator />
+
+      <div className="space-y-3">
+        {[
+          { id: "phone-only", label: "Phone available only", key: "phoneOnly" as const },
+          { id: "incl-vague", label: "Include vague addresses", key: "includeVague" as const },
+          { id: "incl-missing", label: "Include missing addresses", key: "includeMissing" as const },
+          { id: "needs-review", label: "Needs review only", key: "needsReview" as const },
+        ].map(opt => (
+          <div key={opt.id} className="flex items-center justify-between">
+            <Label htmlFor={opt.id}>{opt.label}</Label>
+            <Switch id={opt.id} checked={filters[opt.key]} onCheckedChange={v => onUpdateFilter(opt.key, v)} />
+          </div>
+        ))}
+      </div>
+
+      {hasActiveFilters && (
+        <>
+          <Separator />
+          <Button variant="outline" className="w-full h-11 touch-manipulation sm:h-9" onClick={onClearFilters}>
+            <X className="mr-1 size-4" />Clear All Filters
+          </Button>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── MapTabContent ──────────────────────────────────────────────────────────────
+
+function MapTabContent({ voters, location }: { voters: Voter[]; location: { lat: number; lng: number } | null }) {
+  const [containerRef, top] = useMeasuredTop<HTMLDivElement>()
+  return (
+    <div ref={containerRef} style={fillHeightStyle(top, 320)}>
+      <Card className="h-full overflow-hidden">
+        <VoterMap voters={voters} userLocation={location} />
+      </Card>
+    </div>
   )
 }
 
@@ -764,24 +1012,25 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
     other: voters.filter(v => !["pending", "done", "revisit"].includes(v.status)).length,
   }), [voters])
 
-  const hasActiveFilters =
+  const hasActiveFilters = Boolean(
     filters.status !== "all" || filters.visited !== "all" || filters.name || filters.phone ||
     filters.address || filters.gender || filters.minAge || filters.maxAge || filters.phoneOnly ||
     filters.includeVague || filters.includeMissing || filters.needsReview || selectedAreas.size > 0
+  )
 
-  const updateFilter = <K extends keyof Filters>(key: K, value: Filters[K]) =>
-    setFilters(prev => ({ ...prev, [key]: value }))
+  const updateFilter = useCallback(<K extends keyof Filters>(key: K, value: Filters[K]) =>
+    setFilters(prev => ({ ...prev, [key]: value })), [])
 
-  const clearFilters = () => {
+  const clearFilters = useCallback(() => {
     setFilters(INITIAL_FILTERS)
     setSelectedAreas(new Set())
-  }
+  }, [])
 
-  const toggleArea = (area: string) =>
-    setSelectedAreas(prev => { const s = new Set(prev); s.has(area) ? s.delete(area) : s.add(area); return s })
+  const toggleArea = useCallback((area: string) =>
+    setSelectedAreas(prev => { const s = new Set(prev); s.has(area) ? s.delete(area) : s.add(area); return s }), [])
 
-  const selectAllAreas = () => setSelectedAreas(new Set(clusterSummary.map(c => c.name)))
-  const clearAllAreas = () => setSelectedAreas(new Set())
+  const selectAllAreas = useCallback(() => setSelectedAreas(new Set(clusterSummary.map(c => c.name))), [clusterSummary])
+  const clearAllAreas = useCallback(() => setSelectedAreas(new Set()), [])
 
   // Filter labels for PDF export
   const filterLabels = useMemo(() => {
@@ -796,134 +1045,13 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
   // Show grouped list when 2+ areas selected
   const showGrouped = selectedAreas.size >= 2
 
-  // ── Filter panel content (shared between desktop sidebar and mobile sheet) ──
-  const FilterPanel = () => (
-    <div className="space-y-4">
-      {/* Area checklist */}
-      {clusterSummary.length > 0 && (
-        <>
-          <AreaPanel
-            clusters={clusterSummary}
-            selectedAreas={selectedAreas}
-            onToggle={toggleArea}
-            onSelectAll={selectAllAreas}
-            onClearAll={clearAllAreas}
-          />
-          <Separator />
-        </>
-      )}
-
-      {/* Text search filters */}
-      <div className="space-y-2">
-        <Label>Name</Label>
-        <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-          <Input placeholder="Enter voter name…" value={filters.name} onChange={e => updateFilter("name", e.target.value)} className="pl-9" />
-        </div>
-      </div>
-      <div className="space-y-2">
-        <Label>Phone</Label>
-        <div className="relative">
-          <Phone className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-          <Input placeholder="Search by phone…" value={filters.phone} onChange={e => updateFilter("phone", e.target.value)} className="pl-9" />
-        </div>
-      </div>
-      <div className="space-y-2">
-        <Label>Address</Label>
-        <div className="relative">
-          <MapPinned className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-          <Input placeholder="Search by address…" value={filters.address} onChange={e => updateFilter("address", e.target.value)} className="pl-9" />
-        </div>
-      </div>
-
-      <Separator />
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>Status</Label>
-          <Select value={filters.status} onValueChange={v => updateFilter("status", v as Filters["status"])}>
-            <SelectTrigger><SelectValue placeholder="All Status" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="pending">Pending</SelectItem>
-              <SelectItem value="done">Done</SelectItem>
-              <SelectItem value="locked">Locked</SelectItem>
-              <SelectItem value="revisit">Revisit</SelectItem>
-              <SelectItem value="wrong_address">Wrong Address</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label>Visited</Label>
-          <Select value={filters.visited} onValueChange={v => updateFilter("visited", v as VisitedFilter)}>
-            <SelectTrigger><SelectValue placeholder="All" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              <SelectItem value="visited">Visited</SelectItem>
-              <SelectItem value="unvisited">Unvisited</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Label>Gender</Label>
-        <Select value={filters.gender || ""} onValueChange={v => updateFilter("gender", v ?? "")}>
-          <SelectTrigger><SelectValue placeholder="All Genders" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">All Genders</SelectItem>
-            <SelectItem value="male">Male</SelectItem>
-            <SelectItem value="female">Female</SelectItem>
-            <SelectItem value="other">Other</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>Min Age</Label>
-          <Input type="number" placeholder="Min" value={filters.minAge} onChange={e => updateFilter("minAge", e.target.value)} />
-        </div>
-        <div className="space-y-2">
-          <Label>Max Age</Label>
-          <Input type="number" placeholder="Max" value={filters.maxAge} onChange={e => updateFilter("maxAge", e.target.value)} />
-        </div>
-      </div>
-
-      <Separator />
-
-      <div className="space-y-3">
-        {[
-          { id: "phone-only", label: "Phone available only", key: "phoneOnly" as const },
-          { id: "incl-vague", label: "Include vague addresses", key: "includeVague" as const },
-          { id: "incl-missing", label: "Include missing addresses", key: "includeMissing" as const },
-          { id: "needs-review", label: "Needs review only", key: "needsReview" as const },
-        ].map(opt => (
-          <div key={opt.id} className="flex items-center justify-between">
-            <Label htmlFor={opt.id}>{opt.label}</Label>
-            <Switch id={opt.id} checked={filters[opt.key]} onCheckedChange={v => updateFilter(opt.key, v)} />
-          </div>
-        ))}
-      </div>
-
-      {hasActiveFilters && (
-        <>
-          <Separator />
-          <Button variant="outline" className="w-full" onClick={clearFilters}>
-            <X className="mr-1 size-4" />Clear All Filters
-          </Button>
-        </>
-      )}
-    </div>
-  )
-
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" })
     router.push("/login")
   }
 
   return (
-    <div className="relative flex min-h-screen flex-col bg-background">
+    <div className="relative flex min-h-dvh flex-col bg-background">
       {/* Dark texture background */}
       <div className="pointer-events-none fixed inset-0 -z-10 hidden dark:block" aria-hidden>
         <div className="absolute inset-0 bg-[radial-gradient(680px_360px_at_50%_-8%,rgba(255,255,255,0.06),transparent_70%)]" />
@@ -936,36 +1064,62 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
       </div>
 
       {/* Header */}
-      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 glass-header">
-        <div className="container mx-auto flex h-14 items-center justify-between px-4">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <MapPin className="size-5 text-primary" />
-              <h1 className="font-semibold">Field Dashboard</h1>
+      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 glass-header pt-[env(safe-area-inset-top)]">
+        <div className="container mx-auto flex h-14 items-center justify-between gap-2 px-3 sm:px-4">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
+              <MapPin className="size-5 shrink-0 text-primary" />
+              <h1 className="truncate font-semibold text-sm sm:text-base">Field Dashboard</h1>
             </div>
             <Badge variant="outline" className="hidden sm:inline-flex">
               {user.role === "admin" ? "Admin" : "Field Agent"}
             </Badge>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-3">
             <ThemeToggle />
-            <div className="hidden text-right sm:block">
-              <p className="text-sm font-medium">{user.displayName}</p>
-              <p className="text-xs text-muted-foreground">{user.username}</p>
+
+            {/* Desktop identity + actions */}
+            <div className="hidden items-center gap-3 sm:flex">
+              <div className="text-right">
+                <p className="text-sm font-medium">{user.displayName}</p>
+                <p className="text-xs text-muted-foreground">{user.username}</p>
+              </div>
+              <div className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                <User className="size-4" />
+              </div>
+              {user.role === "admin" && (
+                <a href="/upload">
+                  <Button variant="outline" size="sm">
+                    <Upload className="mr-1 size-4" />Upload
+                  </Button>
+                </a>
+              )}
+              <Button variant="ghost" size="sm" onClick={handleLogout}>
+                <LogOut className="size-4" />
+              </Button>
             </div>
-            <div className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
-              <User className="size-4" />
-            </div>
-            {user.role === "admin" && (
-              <a href="/upload">
-                <Button variant="outline" size="sm">
-                  <Upload className="mr-1 size-4" />Upload
-                </Button>
-              </a>
-            )}
-            <Button variant="ghost" size="sm" onClick={handleLogout}>
-              <LogOut className="size-4" />
-            </Button>
+
+            {/* Mobile overflow menu — Upload / logout / identity collapse in here */}
+            <DropdownMenu>
+              <DropdownMenuTrigger className="-mr-1.5 inline-flex size-11 items-center justify-center rounded-md touch-manipulation hover:bg-accent hover:text-accent-foreground transition-colors sm:hidden">
+                <MoreHorizontal className="size-5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <div className="px-1.5 py-1.5">
+                  <p className="text-sm font-medium">{user.displayName}</p>
+                  <p className="text-xs text-muted-foreground">{user.username} · {user.role === "admin" ? "Admin" : "Field Agent"}</p>
+                </div>
+                <DropdownMenuSeparator />
+                {user.role === "admin" && (
+                  <DropdownMenuItem onClick={() => router.push("/upload")} className="gap-2">
+                    <Upload className="size-4" />Upload
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={handleLogout} className="gap-2">
+                  <LogOut className="size-4" />Log out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </header>
@@ -975,7 +1129,7 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
         <div className="container mx-auto px-4 pt-4 pb-2">
           <button
             onClick={() => setStatsCollapsed(v => !v)}
-            className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
+            className="flex min-h-11 items-center gap-1.5 mb-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full touch-manipulation sm:min-h-0"
           >
             {statsCollapsed ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
             <span className="font-medium">Overview</span>
@@ -986,18 +1140,18 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
             )}
           </button>
           {!statsCollapsed && (
-            <div className="scrollbar-hide flex gap-3 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 sm:grid sm:grid-cols-3 lg:grid-cols-5">
-              <StatCard title="Total" count={stats.total} icon={<User className="size-5" />} />
-              <StatCard title="Pending" count={stats.pending} icon={<Clock className="size-5" />} variant="secondary" />
-              <StatCard title="Done" count={stats.done} icon={<CheckCircle2 className="size-5" />} variant="default" />
-              <StatCard title="Revisit" count={stats.revisit} icon={<RotateCcw className="size-5" />} variant="destructive" />
-              <StatCard title="Other" count={stats.other} icon={<AlertCircle className="size-5" />} variant="outline" />
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-5">
+              <StatCard title="Total" count={stats.total} icon={<User className="size-4 sm:size-5" />} />
+              <StatCard title="Pending" count={stats.pending} icon={<Clock className="size-4 sm:size-5" />} variant="secondary" />
+              <StatCard title="Done" count={stats.done} icon={<CheckCircle2 className="size-4 sm:size-5" />} variant="default" />
+              <StatCard title="Revisit" count={stats.revisit} icon={<RotateCcw className="size-4 sm:size-5" />} variant="destructive" />
+              <StatCard title="Other" count={stats.other} icon={<AlertCircle className="size-4 sm:size-5" />} variant="outline" />
             </div>
           )}
         </div>
 
         {/* Main content */}
-        <div className="container mx-auto px-4 pb-10">
+        <div className="container mx-auto px-4 pb-4 sm:pb-10">
           <div className="flex gap-8">
             {/* Desktop sidebar */}
             <div className="hidden w-72 shrink-0 lg:block">
@@ -1008,9 +1162,19 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  <ScrollArea className="h-[calc(100vh-14rem)]">
+                  <ScrollArea className="h-[calc(100dvh-14rem)]">
                     <div className="pr-2">
-                      <FilterPanel />
+                      <FilterPanel
+                        clusterSummary={clusterSummary}
+                        selectedAreas={selectedAreas}
+                        onToggleArea={toggleArea}
+                        onSelectAllAreas={selectAllAreas}
+                        onClearAllAreas={clearAllAreas}
+                        filters={filters}
+                        onUpdateFilter={updateFilter}
+                        hasActiveFilters={hasActiveFilters}
+                        onClearFilters={clearFilters}
+                      />
                     </div>
                   </ScrollArea>
                 </CardContent>
@@ -1020,37 +1184,59 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
             {/* Right content */}
             <div className="flex-1 min-w-0">
               <Tabs value={activeTab} onValueChange={setActiveTab}>
-                <div className="mb-4 flex items-center justify-between">
-                  <TabsList>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 sm:mb-4">
+                  <TabsList className="h-11 sm:h-8">
                     <TabsTrigger value="list" className="gap-1">
-                      <List className="size-4" />List
+                      <List className="size-4" /><span className="hidden sm:inline">List</span>
                     </TabsTrigger>
                     <TabsTrigger value="map" className="gap-1">
-                      <MapPin className="size-4" />Map
+                      <MapPin className="size-4" /><span className="hidden sm:inline">Map</span>
                     </TabsTrigger>
                   </TabsList>
 
                   {/* Mobile filter button */}
                   <Sheet>
-                    <SheetTrigger className="lg:hidden inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground h-8 px-3">
-                      <Filter className="size-4" />Filters
+                    <SheetTrigger className="lg:hidden inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground h-11 px-3 touch-manipulation sm:h-8">
+                      <Filter className="size-4" /><span className="hidden sm:inline">Filters</span>
                       {hasActiveFilters && <Badge variant="secondary" className="ml-1 px-1 py-0 text-[10px]">Active</Badge>}
                     </SheetTrigger>
-                    <SheetContent side="left" className="w-full sm:max-w-md">
+                    <SheetContent side="left" className="flex w-full flex-col sm:max-w-md">
                       <SheetHeader>
                         <SheetTitle>Filters</SheetTitle>
                         <SheetDescription>Refine your voter search</SheetDescription>
                       </SheetHeader>
-                      <ScrollArea className="h-[calc(100vh-10rem)] mt-4 pr-4">
-                        <FilterPanel />
+                      <ScrollArea className="min-h-0 flex-1 px-4">
+                        <div className="pb-4">
+                          <FilterPanel
+                            clusterSummary={clusterSummary}
+                            selectedAreas={selectedAreas}
+                            onToggleArea={toggleArea}
+                            onSelectAllAreas={selectAllAreas}
+                            onClearAllAreas={clearAllAreas}
+                            filters={filters}
+                            onUpdateFilter={updateFilter}
+                            hasActiveFilters={hasActiveFilters}
+                            onClearFilters={clearFilters}
+                          />
+                        </div>
                       </ScrollArea>
+                      <SheetFooter className="flex-row gap-2 border-t pb-[calc(1rem+env(safe-area-inset-bottom))]">
+                        <Button variant="outline" className="h-11 flex-1 touch-manipulation" onClick={clearFilters}>
+                          Clear all
+                        </Button>
+                        <SheetClose
+                          render={<Button className="h-11 flex-1 touch-manipulation" />}
+                        >
+                          Show {filteredVoters.length} results
+                        </SheetClose>
+                      </SheetFooter>
                     </SheetContent>
                   </Sheet>
                 </div>
 
                 <TabsContent value="list" className="mt-0">
                   {/* Summary bar */}
-                  <div className="mb-4 flex items-center justify-between">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 sm:mb-4">
                     <p className="text-sm text-muted-foreground">
                       {isLoading ? "Loading…" : (
                         selectedAreas.size > 0
@@ -1058,25 +1244,25 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
                           : `${filteredVoters.length} voters`
                       )}
                     </p>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => setDetailView(v => !v)}
-                        className="gap-1 h-8 text-xs px-2.5"
+                        className="gap-1 h-11 touch-manipulation px-2.5 text-xs sm:h-8"
                         title={detailView ? "Switch to compact view" : "Switch to detailed view"}
                       >
                         {detailView ? <List className="size-3.5" /> : <MoreHorizontal className="size-3.5" />}
                         {detailView ? "Compact" : "Detailed"}
                       </Button>
                       {!isLoading && filteredVoters.length > 0 && (
-                        <Button variant="outline" size="sm" onClick={() => setIsExportOpen(true)} className="gap-1">
-                          <Download className="size-4" />Export
+                        <Button variant="outline" size="sm" onClick={() => setIsExportOpen(true)} className="h-11 touch-manipulation gap-1 sm:h-8">
+                          <Download className="size-4" /><span className="hidden sm:inline">Export</span>
                         </Button>
                       )}
                       {hasActiveFilters && (
-                        <Button variant="ghost" size="sm" onClick={clearFilters}>
-                          <X className="mr-1 size-4" />Clear
+                        <Button variant="ghost" size="sm" onClick={clearFilters} className="h-11 touch-manipulation sm:h-8">
+                          <X className="mr-1 size-4" /><span className="hidden sm:inline">Clear</span>
                         </Button>
                       )}
                     </div>
@@ -1115,10 +1301,9 @@ export function FieldDashboard({ user }: FieldDashboardProps) {
                 </TabsContent>
 
                 <TabsContent value="map" className="mt-0">
-                  <Card className="h-[calc(100vh-16rem)]">
-                    <VoterMap voters={filteredVoters} userLocation={location} />
-                  </Card>
+                  <MapTabContent voters={filteredVoters} location={location} />
                 </TabsContent>
+
               </Tabs>
             </div>
           </div>
